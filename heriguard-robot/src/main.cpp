@@ -34,6 +34,7 @@ enum RobotState {
 
 RobotState robotState = IDLE;
 bool patrolActive = false;
+bool bleConnected = false;
 int stateCycleStep = 0;
 
 // ── Sensor ─────────────────────────────────────────────
@@ -72,8 +73,11 @@ struct MapMarker {
 uint8_t markerDistanceCount = 0;
 unsigned long patrolStartTime = 0;
 
-// ── Camera chunking ────────────────────────────────────
+// ── Camera JPEG Capture ────────────────────────────────
 #define JPEG_BUF_SIZE 60000
+#define JPEG_CHUNK_PAYLOAD 506  // 512 BLE MTU - 6 byte header
+#define CAM_TRIGGER 'C'
+
 uint8_t jpegBuffer[JPEG_BUF_SIZE];
 uint16_t jpegLen = 0;
 uint16_t frameId = 0;
@@ -83,7 +87,8 @@ void readSensor();
 void sendSensor();
 void sendStatus();
 void updateDisplay();
-void captureAndSendImage();
+bool captureJpegFromCam();
+void sendJpegViaBle();
 void handleCommand(uint8_t* buf, int len);
 void onBLEConnected(BLEDevice central);
 void onBLEDisconnected(BLEDevice central);
@@ -104,11 +109,15 @@ void setup() {
 
   initSensors();
 
+  // UART cho M-Vision Cam JPEG (921600 baud)
+  Serial1.begin(921600);
+
   if (!BLE.begin()) {
     Serial.println("BLE init failed");
     MiniR4.LED.setColor(255, 0, 0, 100);
     while (1);
   }
+  BLE.setMTU(517);
 
   BLE.setLocalName("HERI-GUARD-R4");
   BLE.setAdvertisedService(heriguardService);
@@ -191,6 +200,10 @@ void runStateMachine() {
     case INSPECT_A:
       inspectWide();
       break;
+    // TODO: Bỏ comment 3 dòng dưới khi test INSPECT_B/C/D
+    // case INSPECT_B: inspectCloseApproach(); break;
+    // case INSPECT_C: inspectScanLow(); break;
+    // case INSPECT_D: inspectScanHigh(); break;
     case INSPECT_E:
       inspectRetract();
       break;
@@ -240,8 +253,8 @@ void inspectWide() {
     sendSensor();
   }
 
-  // Take a picture (camera placeholder)
-  captureAndSendImage();
+  // TODO: Auto-capture khi detect - sẽ làm sau
+  // captureJpegFromCam();
 
   // Create virtual map marker
   bool hasIssue = random(0, 10) > 6;
@@ -253,6 +266,10 @@ void inspectWide() {
     confidence = random(50, 96);
     Serial.print("Issue detected, flags=");
     Serial.println(flags);
+
+    // TODO: Bỏ comment 2 dòng dưới để chuyển sang INSPECT_B thay vì E
+    // robotState = INSPECT_B;
+    // return;
   }
 
   sendMapMarker(markerDistanceCount, flags, confidence);
@@ -375,26 +392,124 @@ void sendStatus() {
   charStatus.writeValue(d, 4);
 }
 
-// ── Camera ─────────────────────────────────────────────
-void captureAndSendImage() {
-  if (!bleConnected) return;
+// ── Camera JPEG Capture ─────────────────────────────────
 
-  MiniR4.Vision.Begin();
-  unsigned int visionData[16];
-  int result = MiniR4.Vision.SmartCamReader(visionData, 500);
+// TODO: SmartCam detection qua UART - sẽ làm sau
+// void captureAndSendDetection() {
+//   MiniR4.Vision.Begin();
+//   unsigned int visionData[16];
+//   int result = MiniR4.Vision.SmartCamReader(visionData, 500);
+//   if (result > 0) {
+//     uint8_t d[2] = { (uint8_t)(visionData[0] & 0xFF), (uint8_t)(visionData[1] & 0xFF) };
+//     charDetection.writeValue(d, 2);
+//     Serial.print("Detection: label="); Serial.print(visionData[0]);
+//     Serial.print(" confidence="); Serial.println(visionData[1]);
+//   }
+// }
 
-  if (result > 0) {
-    uint8_t d[2] = {
-      (uint8_t)(visionData[0] & 0xFF),
-      (uint8_t)(visionData[1] & 0xFF)
-    };
-    charDetection.writeValue(d, 2);
+bool captureJpegFromCam() {
+  if (!bleConnected) return false;
 
-    Serial.print("Detection: label=");
-    Serial.print(visionData[0]);
-    Serial.print(" confidence=");
-    Serial.println(visionData[1]);
+  // Gửi trigger 'C' đến camera → camera chụp JPEG, gửi về UART
+  Serial1.write(CAM_TRIGGER);
+
+  unsigned long start = millis();
+  const unsigned long TIMEOUT = 3000;
+
+  // Đọc header: 0xAA + length (3 bytes)
+  uint8_t header[3];
+  int read = 0;
+  while (read < 3) {
+    if (Serial1.available()) {
+      header[read++] = Serial1.read();
+    } else if (millis() - start > TIMEOUT) {
+      Serial.println("JPEG: header timeout");
+      return false;
+    }
   }
+
+  if (header[0] != 0xAA) {
+    Serial.print("JPEG: bad header 0x");
+    Serial.println(header[0], HEX);
+    return false;
+  }
+
+  uint16_t length = ((uint16_t)header[1] << 8) | header[2];
+  if (length == 0 || length > JPEG_BUF_SIZE) {
+    Serial.print("JPEG: bad length ");
+    Serial.println(length);
+    return false;
+  }
+
+  // Đọc JPEG data
+  uint16_t idx = 0;
+  while (idx < length) {
+    if (Serial1.available()) {
+      jpegBuffer[idx++] = Serial1.read();
+    } else if (millis() - start > TIMEOUT) {
+      Serial.print("JPEG: data timeout ");
+      Serial.print(idx);
+      Serial.print("/");
+      Serial.println(length);
+      return false;
+    }
+  }
+
+  // Đọc + verify checksum
+  while (millis() - start < TIMEOUT) {
+    if (Serial1.available()) {
+      uint8_t receivedChecksum = Serial1.read();
+
+      uint8_t calcChecksum = 0xAA ^ header[1] ^ header[2];
+      for (uint16_t i = 0; i < length; i++) {
+        calcChecksum ^= jpegBuffer[i];
+      }
+
+      if (receivedChecksum != calcChecksum) {
+        Serial.println("JPEG: checksum mismatch");
+        return false;
+      }
+
+      jpegLen = length;
+      Serial.print("JPEG: captured ");
+      Serial.print(length);
+      Serial.println(" bytes");
+      return true;
+    }
+  }
+
+  Serial.println("JPEG: checksum timeout");
+  return false;
+}
+
+void sendJpegViaBle() {
+  if (!bleConnected || jpegLen == 0) return;
+
+  uint16_t totalChunks = (jpegLen + JPEG_CHUNK_PAYLOAD - 1) / JPEG_CHUNK_PAYLOAD;
+
+  for (uint16_t i = 0; i < totalChunks; i++) {
+    uint16_t offset = i * JPEG_CHUNK_PAYLOAD;
+    uint16_t chunkSize = min((uint16_t)JPEG_CHUNK_PAYLOAD, jpegLen - offset);
+
+    uint8_t chunk[512];
+    chunk[0] = frameId & 0xFF;
+    chunk[1] = (frameId >> 8) & 0xFF;
+    chunk[2] = i & 0xFF;
+    chunk[3] = (i >> 8) & 0xFF;
+    chunk[4] = totalChunks & 0xFF;
+    chunk[5] = (totalChunks >> 8) & 0xFF;
+    memcpy(chunk + 6, jpegBuffer + offset, chunkSize);
+
+    charCamera.writeValue(chunk, 6 + chunkSize);
+    delay(5);
+  }
+
+  Serial.print("JPEG: sent ");
+  Serial.print(totalChunks);
+  Serial.println(" chunks via BLE");
+
+  frameId++;
+  jpegLen = 0;
 }
 
 // ── Command Handler ────────────────────────────────────
@@ -413,11 +528,17 @@ void handleCommand(uint8_t* buf, int len) {
 
   switch (cmd) {
     case 'C':
-      Serial.println("Cmd: CAPTURE");
-      captureAndSendImage();
+      Serial.println("Cmd: CAPTURE JPEG");
       MiniR4.LED.setColor(200, 200, 0, 100);
-      delay(200);
-      MiniR4.LED.setColor(0, 200, 0, 100);
+      if (captureJpegFromCam()) {
+        sendJpegViaBle();
+        MiniR4.LED.setColor(0, 200, 0, 100);
+      } else {
+        MiniR4.LED.setColor(200, 0, 0, 100);
+        delay(200);
+        MiniR4.LED.setColor(0, 200, 0, 100);
+        Serial.println("Cmd: CAPTURE FAILED");
+      }
       break;
 
     case 'P':
@@ -450,6 +571,144 @@ void handleCommand(uint8_t* buf, int len) {
       break;
   }
 }
+
+// ============================================================
+// TODO: Di chuyển + Servo — Bỏ comment toàn bộ block này khi test
+// ============================================================
+/*
+
+// ── Servo góc ──────────────────────────────────────────
+#define SERVO_PAN_L     45    // RC1: Pan trái
+#define SERVO_PAN_C     90    // RC1: Pan giữa (home)
+#define SERVO_PAN_R     135   // RC1: Pan phải
+#define SERVO_FOLD      0     // RC2: Gập cam (home)
+#define SERVO_TILT_LOW  45    // RC3: Hạ cam (scan low)
+#define SERVO_TILT_HIGH 135   // RC3: Nâng cam (scan high)
+#define SERVO_TILT_HOME 90    // RC3: Home
+#define SERVO_TWIST_LOW 0     // RC4: Góc thấp
+#define SERVO_TWIST_HIGH 180  // RC4: Góc cao
+#define SERVO_TWIST_HOME 90   // RC4: Home
+
+void servoHome() {
+  MiniR4.RC1.setAngle(SERVO_PAN_C);
+  MiniR4.RC2.setAngle(SERVO_FOLD);
+  MiniR4.RC3.setAngle(SERVO_TILT_HOME);
+  MiniR4.RC4.setAngle(SERVO_TWIST_HOME);
+}
+
+void servoPan(uint8_t angle) {
+  MiniR4.RC1.setAngle(angle);
+  delay(300);  // Chờ servo tới vị trí
+}
+
+// ── Junction detection + handling ──────────────────────
+void handleJunction() {
+  uint8_t jt = MiniR4.I2C2.MXLineTracer.getJunctionType();
+  // 0=straight, 1=T-left, 2=T-right, 3=cross, 4=end
+  if (jt == 0 || jt == 3) {
+    // Đi thẳng
+    return;
+  }
+  if (jt == 1 || jt == 4) {
+    // Rẽ trái: quay M3 lùi, M4 tiến
+    MiniR4.M3.setSpeed(-40);
+    MiniR4.M4.setSpeed(40);
+    delay(500);
+    MiniR4.M3.setSpeed(0);
+    MiniR4.M4.setSpeed(0);
+  } else if (jt == 2) {
+    // Rẽ phải: quay M3 tiến, M4 lùi
+    MiniR4.M3.setSpeed(40);
+    MiniR4.M4.setSpeed(-40);
+    delay(500);
+    MiniR4.M3.setSpeed(0);
+    MiniR4.M4.setSpeed(0);
+  }
+}
+
+// ── INSPECT_B: Close Approach ──────────────────────────
+// Laser đo khoảng → tiến 15-20cm → chụp ảnh cận cảnh
+void inspectCloseApproach() {
+  uint16_t dist = MiniR4.I2C1.MXLaserV2.getDistance();
+  Serial.print("Close approach: dist=");
+  Serial.println(dist);
+
+  // Tiến đến cách tường 15-20cm
+  // Nếu khoảng cách hiện tại lớn hơn 25cm thì tiến
+  if (dist > 250) {
+    MiniR4.M3.setSpeed(30);
+    MiniR4.M4.setSpeed(30);
+    while (dist > 200) {
+      dist = MiniR4.I2C1.MXLaserV2.getDistance();
+      delay(50);
+      if (dist <= 20) break;  // Laser out of range = thoát
+    }
+    MiniR4.M3.setSpeed(0);
+    MiniR4.M4.setSpeed(0);
+  }
+
+  // Chụp ảnh cận cảnh
+  captureJpegFromCam();
+  robotState = INSPECT_C;
+}
+
+// ── INSPECT_C: Scan Low ────────────────────────────────
+// RC3 hạ cam, RC4 góc thấp, RC1 pan 3 vị trí
+void inspectScanLow() {
+  MiniR4.RC3.setAngle(SERVO_TILT_LOW);    // Hạ cam
+  MiniR4.RC4.setAngle(SERVO_TWIST_LOW);   // Góc thấp
+  delay(500);
+
+  // Pan: trái → giữa → phải
+  uint8_t positions[] = {SERVO_PAN_L, SERVO_PAN_C, SERVO_PAN_R};
+  for (int i = 0; i < 3; i++) {
+    servoPan(positions[i]);
+    // TODO: Chụp + AI detect tại mỗi vị trí
+    // captureJpegFromCam();
+  }
+
+  robotState = INSPECT_D;
+}
+
+// ── INSPECT_D: Scan High ───────────────────────────────
+// RC3 nâng cam, RC4 góc cao, RC1 pan 3 vị trí
+void inspectScanHigh() {
+  MiniR4.RC3.setAngle(SERVO_TILT_HIGH);   // Nâng cam
+  MiniR4.RC4.setAngle(SERVO_TWIST_HIGH);  // Góc cao
+  delay(500);
+
+  // Pan: trái → giữa → phải
+  uint8_t positions[] = {SERVO_PAN_L, SERVO_PAN_C, SERVO_PAN_R};
+  for (int i = 0; i < 3; i++) {
+    servoPan(positions[i]);
+    // TODO: Chụp + AI detect tại mỗi vị trí
+    // captureJpegFromCam();
+  }
+
+  robotState = INSPECT_E;
+}
+
+// ── Retract (bản đầy đủ) ──────────────────────────────
+// Gập camera, căn line, về home
+void inspectRetractFull() {
+  servoHome();
+  delay(300);
+
+  // Căn lại line sau khi scan
+  float err = MiniR4.I2C2.MXLineTracer.getError();
+  if (abs(err) > 1.0) {
+    int correction = (int)(err * 15);
+    MiniR4.M3.setSpeed(constrain(-correction, -30, 30));
+    MiniR4.M4.setSpeed(constrain(correction, -30, 30));
+    delay(200);
+    MiniR4.M3.setSpeed(0);
+    MiniR4.M4.setSpeed(0);
+  }
+
+  robotState = PATROL_MOVE;
+}
+
+*/
 
 // ── Display ────────────────────────────────────────────
 void updateDisplay() {

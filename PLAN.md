@@ -420,6 +420,31 @@ Trọng tâm: M-Vision Cam UART, JPEG chunk, BLE notify.
 
 ---
 
+### Phase 7: Gemini AI Integration (1-2 ngày)
+
+Trọng tâm: Tích hợp Gemini 1.5 Flash phân tích ảnh + sensor data tổng hợp.
+
+#### App
+
+| Task | File | Chi tiết |
+|------|------|----------|
+| Gemini types | `src/types/gemini.ts` | ✅ Đã tạo — `GeminiAnalysis`, `GeminiFinding` |
+| Gemini API lib | `src/lib/gemini.ts` | ✅ Đã tạo — REST API, gửi ảnh base64 + prompt, parse JSON response |
+| Mock Gemini | `src/lib/mockGemini.ts` | ✅ Đã tạo — 3 kịch bản: low (an toàn), medium (rêu), high (nứt + mốc) |
+| Settings store | `src/store/settingsStore.ts` | ✅ Đã sửa — thêm `geminiApiKey`, `geminiMockMode` |
+| AI tab | `src/app/(tabs)/ai.tsx` | ✅ Đã sửa — thay rule-based bằng gọi Gemini, hiển thị severity badge + findings + correlations + recommendations |
+
+#### Kiểm thử
+
+- [ ] Mock mode: hiển thị 3 kịch bản phân tích
+- [ ] Gemini thật: gửi ảnh + sensor → nhận kết quả JSON
+- [ ] Ảnh không có: vẫn phân tích được dựa trên sensor data
+- [ ] Loading state: ActivityIndicator khi đợi API
+- [ ] Error state: hiển thị lỗi nếu API fail
+- [ ] AI tab hiển thị đúng: severity badge, findings, env assessment, correlations, recommendations
+
+---
+
 ## 6. Tổng hợp files thay đổi
 
 ### 6.1 Firmware — `heriguard-b4/`
@@ -450,12 +475,27 @@ Trọng tâm: M-Vision Cam UART, JPEG chunk, BLE notify.
 | `app/(tabs)/ai.tsx` | **Sửa** — phân tích dựa trên detection thật |
 | `app/(tabs)/history.tsx` | **Sửa** — patrol history + filter |
 | `app/(tabs)/settings.tsx` | **Sửa** — thêm BLE scan UI |
+| **`types/gemini.ts`** | **Mới** — `GeminiAnalysis`, `GeminiFinding` types |
+| **`lib/gemini.ts`** | **Mới** — Gemini 1.5 Flash REST API wrapper |
+| **`lib/mockGemini.ts`** | **Mới** — 3 kịch bản mock cho dev offline |
+| `store/settingsStore.ts` | **Sửa** — thêm `geminiApiKey`, `geminiMockMode` |
+| `app/(tabs)/ai.tsx` | **Sửa** — tích hợp Gemini API, hiển thị kết quả có cấu trúc |
 
 ### 6.3 Camera — OpenMV Script
 
 | File | Thay đổi |
 |------|---------|
 | `main.py` (trên M-Vision Cam) | **Mới** — JPEG capture, crack detection, UART 921600 |
+
+### 6.4 Gemini AI — Phân tích tổng hợp (MỚI)
+
+| File | Thay đổi |
+|------|---------|
+| `src/types/gemini.ts` | **Mới** — `GeminiAnalysis`, `GeminiFinding` types |
+| `src/lib/gemini.ts` | **Mới** — Gemini 1.5 Flash REST API wrapper, gửi ảnh + sensor data |
+| `src/lib/mockGemini.ts` | **Mới** — Mock 3 kịch bản (low/medium/high severity) cho dev offline |
+| `src/store/settingsStore.ts` | **Sửa** — thêm `geminiApiKey`, `geminiMockMode` |
+| `src/app/(tabs)/ai.tsx` | **Sửa** — thay rule-based bằng Gemini API, hiển thị findings + correlations + recommendations |
 
 ---
 
@@ -527,7 +567,9 @@ Tuần 4-5: Camera JPEG + UART        ░░░░░░░░░░░░░░
 Tuần 5: Alert + Notification         ░░░░░░░░░░░░░░░░░░████
          (Phase 5)
 Tuần 6: Testing + Demo              ░░░░░░░░░░░░░░░░░░░░████
-         (Phase 6)
+          (Phase 6)
+Tuần 6-7: Gemini AI Integration     ░░░░░░░░░░░░░░░░░░░░░░████
+          (Phase 7)
 ```
 
 ---

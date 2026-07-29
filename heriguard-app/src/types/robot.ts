@@ -43,7 +43,7 @@ export interface Patrol {
 
 export interface Alert {
   id: string;
-  type: "crack_high" | "crack_increased" | "disconnected";
+  type: "crack_high" | "crack_increased" | "disconnected" | `detect_${string}`;
   message: string;
   timestamp: string;
   read: boolean;

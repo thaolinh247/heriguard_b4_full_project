@@ -187,16 +187,8 @@ export function startMockPatrol() {
         const updatedImg = { ...img, detections: [{ label: detection.label, confidence: detection.confidence }] };
         deviceStore.addImage(updatedImg);
 
-        // Trigger alert for high-confidence cracks
-        if (detection.label === "crack_large" && detection.confidence > 0.75) {
-          useAlertStore.getState().addAlert({
-            id: `alert-${Date.now()}`,
-            type: "crack_high",
-            message: `Phát hiện ${detection.label} tại vị trí ${(mockDistanceX2 - 1) * 0.5}m — độ tin cậy ${(detection.confidence * 100).toFixed(0)}%`,
-            timestamp: new Date().toISOString(),
-            read: false,
-          });
-        }
+        // Auto-trigger alert via alertStore
+        useAlertStore.getState().triggerFromDetection(detection);
       }
     }
 
