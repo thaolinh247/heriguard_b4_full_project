@@ -2,14 +2,29 @@ import { BleManager, type Device } from "react-native-ble-plx";
 import { Platform, PermissionsAndroid } from "react-native";
 import { useDeviceStore } from "@/store/deviceStore";
 import { useDashboardStore } from "@/store/dashboardStore";
+import { usePatrolStore } from "@/store/patrolStore";
+import { ROBOT_STATE_VALUES, type RobotState, type MapMarker } from "@/types/robot";
 
 const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
 const CHAR_CAMERA_DATA = "12345678-1234-5678-1234-56789abcdef1";
+const CHAR_DETECTION = "12345678-1234-5678-1234-56789abcdef2";
 const CHAR_SENSOR_DATA = "12345678-1234-5678-1234-56789abcdef3";
 const CHAR_COMMAND = "12345678-1234-5678-1234-56789abcdef4";
 const CHAR_STATUS = "12345678-1234-5678-1234-56789abcdef5";
+const CHAR_MAP_DATA = "12345678-1234-5678-1234-56789abcdef6";
 
-const manager = new BleManager();
+let manager: BleManager | null = null;
+
+function getManager(): BleManager | null {
+  if (!manager) {
+    try {
+      manager = new BleManager();
+    } catch {
+      manager = null;
+    }
+  }
+  return manager;
+}
 
 // ── Permissions ──────────────────────────────────────────────
 export async function requestBlePermissions(): Promise<boolean> {
@@ -43,11 +58,13 @@ let isScanning = false;
 
 export function startScan(onDeviceFound: (device: Device) => void) {
   if (isScanning) return;
-  isScanning = true;
+  const m = getManager();
+  if (!m) return;
 
+  isScanning = true;
   useDeviceStore.getState().setConnectionStatus("scanning");
 
-  manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
+  m.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
     if (error) {
       console.warn("BLE scan error:", error.message);
       isScanning = false;
@@ -59,13 +76,15 @@ export function startScan(onDeviceFound: (device: Device) => void) {
   });
 
   setTimeout(() => {
-    manager.stopDeviceScan();
+    m.stopDeviceScan();
     isScanning = false;
   }, 15000);
 }
 
 export function stopScan() {
-  manager.stopDeviceScan();
+  const m = getManager();
+  if (!m) return;
+  m.stopDeviceScan();
   isScanning = false;
 }
 
@@ -127,8 +146,57 @@ function handleSensorData(data: number[]) {
 
 function handleStatusData(data: number[]) {
   if (data.length < 2) return;
-  useDeviceStore.getState().setBatteryLevel(data[0]);
-  useDeviceStore.getState().setRssi(data.length > 1 ? data[1] : 0);
+  const store = useDeviceStore.getState();
+  store.setBatteryLevel(data[0]);
+  store.setRssi(data[1] ?? 0);
+
+  // Byte 2: robot_state, Byte 3: patrol_active
+  if (data.length >= 4) {
+    const stateVal = data[2];
+    const robotState: RobotState = ROBOT_STATE_VALUES[stateVal] ?? "idle";
+    store.setRobotState(robotState);
+    store.setPatrolActive(data[3] === 1);
+  }
+}
+
+function handleDetectionData(data: number[]) {
+  if (data.length < 2) return;
+  const label = data[0];
+  const confidence = data[1];
+  const labelNames: Record<number, string> = {
+    0: "crack_small", 1: "crack_large", 2: "moss",
+    3: "mold", 4: "stain",
+  };
+  const name = labelNames[label] ?? "unknown";
+  useDeviceStore.getState().addImage({
+    id: `detect-${Date.now()}`,
+    uri: "",
+    timestamp: new Date().toLocaleTimeString("vi-VN"),
+    temp: useDashboardStore.getState().currentTemp ?? 0,
+    humidity: useDashboardStore.getState().currentHumidity ?? 0,
+    detections: [{ label: name, confidence }],
+  });
+}
+
+function handleMapMarker(data: number[]) {
+  if (data.length < 9) return;
+  const flags = data[1];
+  const marker: MapMarker = {
+    distanceX2: data[0],
+    flags,
+    hasLowIssue: (flags & 0x01) !== 0,
+    hasHighIssue: (flags & 0x02) !== 0,
+    hasMoss: (flags & 0x04) !== 0,
+    hasMold: (flags & 0x08) !== 0,
+    hasStain: (flags & 0x10) !== 0,
+    hasCrackSmall: (flags & 0x20) !== 0,
+    hasCrackLarge: (flags & 0x40) !== 0,
+    confidence: data[2],
+    temperature: (data[3] | (data[4] << 8)) / 100,
+    humidity: (data[5] | (data[6] << 8)) / 100,
+    timestamp: data[7] | (data[8] << 8),
+  };
+  usePatrolStore.getState().addMarker(marker);
 }
 
 function parseCharacteristicData(base64Value: string): number[] {
@@ -180,6 +248,8 @@ export async function connectToDevice(device: Device): Promise<boolean> {
       subscribeToCharacteristic(connected, CHAR_CAMERA_DATA, handleCameraChunk),
       subscribeToCharacteristic(connected, CHAR_SENSOR_DATA, handleSensorData),
       subscribeToCharacteristic(connected, CHAR_STATUS, handleStatusData),
+      subscribeToCharacteristic(connected, CHAR_DETECTION, handleDetectionData),
+      subscribeToCharacteristic(connected, CHAR_MAP_DATA, handleMapMarker),
     ];
 
     // Listen for disconnect

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { RobotState } from "@/types/robot";
 
 export type ConnectionStatus = "idle" | "scanning" | "connecting" | "connected" | "disconnected";
 
@@ -17,6 +18,8 @@ interface DeviceState {
   connectionStatus: ConnectionStatus;
   batteryLevel: number;
   rssi: number;
+  robotState: RobotState;
+  patrolActive: boolean;
   latestImage: CameraImage | null;
   imageHistory: CameraImage[];
   setDeviceName: (name: string | null) => void;
@@ -24,6 +27,8 @@ interface DeviceState {
   setConnectionStatus: (status: ConnectionStatus) => void;
   setBatteryLevel: (level: number) => void;
   setRssi: (rssi: number) => void;
+  setRobotState: (state: RobotState) => void;
+  setPatrolActive: (active: boolean) => void;
   addImage: (image: CameraImage) => void;
 }
 
@@ -33,6 +38,8 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   connectionStatus: "idle",
   batteryLevel: 0,
   rssi: 0,
+  robotState: "idle",
+  patrolActive: false,
   latestImage: null,
   imageHistory: [],
   setDeviceName: (name) => set({ deviceName: name }),
@@ -40,6 +47,8 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   setConnectionStatus: (status) => set({ connectionStatus: status }),
   setBatteryLevel: (level) => set({ batteryLevel: level }),
   setRssi: (rssi) => set({ rssi }),
+  setRobotState: (state) => set({ robotState: state }),
+  setPatrolActive: (active) => set({ patrolActive: active }),
   addImage: (image) =>
     set((state) => ({
       latestImage: image,

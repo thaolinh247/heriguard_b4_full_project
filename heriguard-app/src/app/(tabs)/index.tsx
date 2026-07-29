@@ -4,6 +4,9 @@ import { StatusDot } from "@/components/dashboard/StatusDot";
 import { CameraCard } from "@/components/dashboard/CameraCard";
 import { MiniChart } from "@/components/dashboard/MiniChart";
 import { TrendSummary } from "@/components/dashboard/TrendSummary";
+import { StateIndicator } from "@/components/dashboard/StateIndicator";
+import { ControlPanel } from "@/components/dashboard/ControlPanel";
+import { VirtualMap } from "@/components/dashboard/VirtualMap";
 import { startMockBle, stopMockBle } from "@/lib/mockBle";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { useSettingsStore } from "@/store/settingsStore";
@@ -50,6 +53,17 @@ export default function HomeScreen() {
         <Text style={styles.connText}>
           {bleConnected ? "Đã kết nối BLE" : "Đang kết nối…"}
         </Text>
+      </View>
+
+      {/* State indicator */}
+      <StateIndicator />
+
+      {/* Control panel */}
+      <ControlPanel />
+
+      {/* Virtual map */}
+      <View style={styles.virtualMapWrap}>
+        <VirtualMap />
       </View>
 
       {/* Cards */}
@@ -141,6 +155,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.inkSoft,
     letterSpacing: 0.3,
+  },
+  virtualMapWrap: {
+    marginBottom: 14,
   },
   cards: {
     gap: 14,

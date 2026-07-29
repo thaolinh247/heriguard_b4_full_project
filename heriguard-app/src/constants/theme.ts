@@ -35,3 +35,14 @@ export const RiskLabels = {
 } as const;
 
 export type RiskLevel = keyof typeof RiskColors;
+
+export const StateColors: Record<string, string> = {
+  idle: Colors.inkSoft,
+  patrol_move: "#4A7DB4",
+  inspect_wide: Colors.gold,
+  inspect_close: "#D4763A",
+  inspect_scan_low: "#D4763A",
+  inspect_scan_high: "#D4763A",
+  retract: Colors.lacquer,
+  emergency: Colors.lacquer,
+};
