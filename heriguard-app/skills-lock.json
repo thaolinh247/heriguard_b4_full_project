@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "expo-brownfield": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/expo/skills/expo-brownfield/SKILL.md",
+      "computedHash": "32f8a554de7abbcd874197b3c7e99055896ff8f712794dfb2ea621068acba7de"
+    },
+    "expo-data-fetching": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/expo/skills/expo-data-fetching/SKILL.md",
+      "computedHash": "2f007dc1082f0bb525505b956dd0916c13e9c3f0d846b9aaa51f7b6ebcf849b0"
+    },
+    "expo-project-structure": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/expo/skills/expo-project-structure/SKILL.md",
+      "computedHash": "07627171bb00fe246c07251f5fcc0d865b84c4694c9d5ccdecc55d649a12502c"
+    },
+    "expo-tailwind-setup": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/expo/skills/expo-tailwind-setup/SKILL.md",
+      "computedHash": "13d0feacc91df6a84da6777a11d967e398b76dada3b353e5df508576475e6aed"
+    }
+  }
+}

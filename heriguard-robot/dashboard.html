@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HERI-GUARD · Giám sát bảo tồn di tích</title>
+<style>
+  :root{
+    --cream:#F2F7F1;
+    --paper:#FFFFFF;
+    --ink:#2A2420;
+    --ink-soft:#6b6258;
+    --lacquer:#B23A2E;
+    --lacquer-dark:#8C2C22;
+    --jade:#2F6F62;
+    --jade-light:#DCEDE7;
+    --gold:#C99A3E;
+    --gold-light:#F3E6C4;
+    --line:rgba(42,36,32,0.16);
+    --font-display:'Iowan Old Style','Palatino Linotype',Georgia,'Noto Serif',serif;
+    --font-body:'Segoe UI','Helvetica Neue',Arial,sans-serif;
+    --font-mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--cream);color:var(--ink);font-family:var(--font-body);line-height:1.55;}
+  .page{max-width:1100px;margin:0 auto;padding:28px 20px 60px;}
+
+  .topbar{
+    display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:16px;
+    padding-bottom:22px;margin-bottom:28px;border-bottom:1px solid var(--line);position:relative;
+  }
+  .topbar::before{
+    content:'';position:absolute;left:0;right:0;top:-14px;height:14px;
+    background:repeating-linear-gradient(90deg,var(--jade-light) 0 18px,transparent 18px 36px);
+    opacity:.5;-webkit-mask-image:linear-gradient(90deg,transparent,black 15%,black 85%,transparent);
+            mask-image:linear-gradient(90deg,transparent,black 15%,black 85%,transparent);
+  }
+  .brand{display:flex;align-items:center;gap:12px;}
+  .status-dot{
+    width:10px;height:10px;border-radius:50%;background:var(--jade);
+    box-shadow:0 0 0 0 rgba(47,111,98,.5);animation:pulse 2.4s ease-out infinite;
+  }
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(47,111,98,.45);}
+    70%{box-shadow:0 0 0 9px rgba(47,111,98,0);}
+    100%{box-shadow:0 0 0 0 rgba(47,111,98,0);}
+  }
+  h1{font-family:var(--font-display);font-style:italic;font-weight:600;font-size:32px;margin:0;letter-spacing:.01em;}
+  .subtitle{font-size:13px;color:var(--ink-soft);margin-top:4px;}
+  .site-meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-soft);text-align:right;}
+  .site-meta strong{color:var(--ink);font-weight:600;}
+
+  .plaque{
+    position:relative;background:var(--paper);border:1px solid var(--line);padding:26px 22px 22px;
+  }
+  .plaque::before,.plaque::after{
+    content:'';position:absolute;width:8px;height:8px;background:var(--gold);transform:rotate(45deg);
+  }
+  .plaque::before{top:-4px;left:-4px;}
+  .plaque::after{bottom:-4px;right:-4px;}
+  .plaque-label{
+    position:absolute;top:-11px;left:22px;background:var(--paper);padding:0 8px;
+    font-family:var(--font-mono);font-size:11px;letter-spacing:.09em;
+    text-transform:uppercase;color:var(--jade);
+  }
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;}
+  .full{grid-column:1 / -1;}
+  @media(max-width:760px){.grid{grid-template-columns:1fr;}}
+
+  .frame{position:relative;border-radius:2px;overflow:hidden;background:var(--jade-light);aspect-ratio:4/3;}
+  .frame svg{width:100%;height:100%;display:block;}
+  .osd{
+    position:absolute;top:10px;right:10px;background:rgba(20,26,24,.62);color:#F2F7F1;
+    font-family:var(--font-mono);font-size:11px;padding:4px 8px;border-radius:2px;letter-spacing:.03em;
+  }
+  .reading-row{display:flex;gap:18px;margin-top:18px;padding-top:16px;border-top:1px dashed var(--line);}
+  .reading{flex:1;}
+  .reading .k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);}
+  .reading .v{font-family:var(--font-mono);font-size:26px;font-weight:600;margin-top:2px;}
+  .v.temp{color:var(--lacquer-dark);}
+  .v.hum{color:var(--jade);}
+
+  .chart-wrap{height:290px;}
+  .legend-row{display:flex;gap:18px;margin-top:14px;font-size:12px;color:var(--ink-soft);}
+  .legend-row span{display:inline-flex;align-items:center;gap:6px;}
+  .swatch{width:10px;height:10px;border-radius:50%;display:inline-block;}
+
+  .conn-bar{
+    display:flex;align-items:center;gap:8px;margin-bottom:18px;
+    font-family:var(--font-mono);font-size:12px;color:var(--ink-soft);
+  }
+  .conn-dot{width:8px;height:8px;border-radius:50%;background:#aaa;transition:background .3s;}
+  .conn-dot.on{background:var(--jade);}
+  .conn-dot.off{background:var(--lacquer);}
+
+  .ai-head{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;}
+  .badge{
+    font-family:var(--font-mono);font-size:12px;padding:5px 12px;border-radius:14px;
+    border:1px solid currentColor;white-space:nowrap;
+  }
+  .btn{
+    font-family:var(--font-body);font-size:13px;font-weight:600;
+    background:var(--ink);color:var(--cream);border:none;
+    padding:9px 18px;border-radius:2px;cursor:pointer;letter-spacing:.02em;
+    transition:background .15s ease;
+  }
+  .btn:hover{background:var(--lacquer-dark);}
+  .btn:disabled{opacity:.5;cursor:progress;}
+  .ai-body{
+    margin-top:16px;font-size:15px;color:var(--ink);
+    border-left:2px solid var(--gold);padding-left:16px;min-height:48px;
+  }
+  .ai-body.loading{color:var(--ink-soft);font-style:italic;}
+  footer{margin-top:34px;font-size:12px;color:var(--ink-soft);text-align:center;}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="status-dot" id="statusDot"></span>
+      <div>
+        <h1>HERI-GUARD</h1>
+        <div class="subtitle">Hệ thống giám sát môi trường bảo tồn di tích</div>
+      </div>
+    </div>
+    <div class="site-meta">
+      Trạm quan trắc <strong>#01</strong><br>
+      Cập nhật lúc <strong id="metaTime">—</strong>
+    </div>
+  </header>
+
+  <div class="conn-bar">
+    <span class="conn-dot" id="connDot"></span>
+    <span id="connText">Đang kết nối MQTT…</span>
+  </div>
+
+  <main class="grid">
+
+    <!-- Camera panel -->
+    <section class="plaque">
+      <span class="plaque-label">Ghi hình hiện trường</span>
+      <div class="frame">
+        <svg viewBox="0 0 400 300" preserveAspectRatio="xMidYMid slice">
+          <rect width="400" height="300" fill="#DCEDE7"/>
+          <rect y="210" width="400" height="90" fill="#C7DED6"/>
+          <polygon points="80,210 200,110 320,210" fill="#B23A2E" opacity="0.85"/>
+          <rect x="120" y="150" width="160" height="60" fill="#F3E6C4"/>
+          <rect x="150" y="170" width="26" height="40" fill="#8C2C22" opacity="0.8"/>
+          <rect x="224" y="170" width="26" height="40" fill="#8C2C22" opacity="0.8"/>
+          <line x1="200" y1="110" x2="200" y2="150" stroke="#8C2C22" stroke-width="4"/>
+          <circle cx="60" cy="50" r="26" fill="#F3E6C4" opacity="0.7"/>
+        </svg>
+        <div class="osd" id="osdTime">—</div>
+      </div>
+      <div class="reading-row">
+        <div class="reading">
+          <div class="k">Nhiệt độ hiện tại</div>
+          <div class="v temp" id="curTemp">—</div>
+        </div>
+        <div class="reading">
+          <div class="k">Độ ẩm hiện tại</div>
+          <div class="v hum" id="curHum">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Chart panel -->
+    <section class="plaque">
+      <span class="plaque-label">Biến động nhiệt độ &amp; độ ẩm</span>
+      <div class="chart-wrap"><canvas id="envChart"></canvas></div>
+      <div class="legend-row">
+        <span><i class="swatch" style="background:#B23A2E"></i>Nhiệt độ (°C)</span>
+        <span><i class="swatch" style="background:#2F6F62"></i>Độ ẩm (%)</span>
+      </div>
+    </section>
+
+    <!-- AI panel -->
+    <section class="plaque full">
+      <span class="plaque-label">Nhận định</span>
+      <div class="ai-head">
+        <span class="badge" id="riskBadge" style="color:var(--ink-soft)">Chờ dữ liệu…</span>
+        <button class="btn" id="analyzeBtn" disabled>Phân tích ngay</button>
+      </div>
+      <div class="ai-body" id="aiBody">Chờ nhận dữ liệu từ cảm biến để đánh giá điều kiện môi trường.</div>
+    </section>
+
+  </main>
+
+  <footer>HERI-GUARD — Dữ liệu thời gian thực qua MQTT. Đóng trang sẽ mất lịch sử biểu đồ.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+(function(){
+  const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+  const TOPIC_TEMP = "heriguard/temp";
+  const TOPIC_HUM  = "heriguard/humidity";
+  const MAX_POINTS = 50;
+
+  const labels  = [];
+  const tempArr = [];
+  const humArr  = [];
+
+  let lastTemp = null;
+  let lastHum  = null;
+
+  // ── DOM refs ──────────────────────────────────────
+  const $metaTime  = document.getElementById("metaTime");
+  const $osdTime   = document.getElementById("osdTime");
+  const $curTemp   = document.getElementById("curTemp");
+  const $curHum    = document.getElementById("curHum");
+  const $connDot   = document.getElementById("connDot");
+  const $connText  = document.getElementById("connText");
+  const $statusDot = document.getElementById("statusDot");
+  const $riskBadge = document.getElementById("riskBadge");
+  const $aiBody    = document.getElementById("aiBody");
+  const $analyzeBtn= document.getElementById("analyzeBtn");
+
+  function setConn(on){
+    $connDot.className = "conn-dot " + (on ? "on" : "off");
+    $connText.textContent = on
+      ? "MQTT đã kết nối — broker.hivemq.com"
+      : "MQTT đang kết nối lại…";
+    $statusDot.style.background = on ? "var(--jade)" : "var(--lacquer)";
+  }
+
+  // ── Chart ─────────────────────────────────────────
+  const chart = new Chart(document.getElementById("envChart"), {
+    type: "line",
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: "Nhiệt độ (°C)",
+          data: tempArr,
+          borderColor: "#B23A2E",
+          backgroundColor: "transparent",
+          yAxisID: "y",
+          tension: 0.3,
+          pointRadius: 2
+        },
+        {
+          label: "Độ ẩm (%)",
+          data: humArr,
+          borderColor: "#2F6F62",
+          backgroundColor: "transparent",
+          yAxisID: "y1",
+          tension: 0.3,
+          pointRadius: 2
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y:  { position: "left",  title: { display: true, text: "°C" }, grid: { color: "rgba(42,36,32,0.08)" } },
+        y1: { position: "right", title: { display: true, text: "%"  }, grid: { display: false } },
+        x:  { grid: { display: false } }
+      }
+    }
+  });
+
+  function pushPoint(){
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString("vi-VN");
+    labels.push(timeStr);
+    tempArr.push(lastTemp);
+    humArr.push(lastHum);
+    if(labels.length > MAX_POINTS){
+      labels.shift();  tempArr.shift();  humArr.shift();
+    }
+    chart.update();
+    $metaTime.textContent = now.toLocaleString("vi-VN");
+    $osdTime.textContent  = now.toLocaleString("vi-VN");
+  }
+
+  // ── Risk badge (rule-based) ───────────────────────
+  function assessRisk(t, h){
+    if(h > 75 || t > 30) return { label:"Cảnh báo", color:"var(--lacquer)" };
+    if(h > 68 || t > 28 || h < 45) return { label:"Cần chú ý", color:"var(--gold)" };
+    return { label:"An toàn", color:"var(--jade)" };
+  }
+  function updateRisk(){
+    if(lastTemp === null || lastHum === null) return;
+    const r = assessRisk(lastTemp, lastHum);
+    $riskBadge.textContent = r.label;
+    $riskBadge.style.color = r.color;
+    $analyzeBtn.disabled = false;
+  }
+
+  // ── AI placeholder ────────────────────────────────
+  $analyzeBtn.addEventListener("click", function(){
+    $aiBody.classList.add("loading");
+    $aiBody.textContent = "Đang phân tích…";
+    setTimeout(function(){
+      $aiBody.classList.remove("loading");
+      if(lastTemp === null || lastHum === null){
+        $aiBody.textContent = "Chưa có dữ liệu cảm biến.";
+        return;
+      }
+      const r = assessRisk(lastTemp, lastHum);
+      let msg = "Nhiệt độ hiện tại: " + lastTemp + "°C, độ ẩm: " + lastHum + "%. ";
+      msg += "Mức đánh giá: " + r.label + ". ";
+      if(r.label === "Cảnh báo"){
+        msg += "Điều kiện ngoài ngưỡng an toàn cho di tích. Cần kiểm tra hệ thống thông gió/làm mát và giảm độ ẩm.";
+      } else if(r.label === "Cần chú ý"){
+        msg += "Điều kiện gần ngưỡng, cần theo dõi sát và chuẩn bị biện pháp điều hòa.";
+      } else {
+        msg += "Điều kiện nằm trong ngưỡng an toàn cho bảo tồn di tích.";
+      }
+      msg += "\n\n(Tích hợp AI phân tích chuyên sâu — sắp ra mắt.)";
+      $aiBody.textContent = msg;
+    }, 800);
+  });
+
+  // ── MQTT ──────────────────────────────────────────
+  const client = mqtt.connect(BROKER);
+
+  client.on("connect", function(){
+    setConn(true);
+    client.subscribe(TOPIC_TEMP);
+    client.subscribe(TOPIC_HUM);
+  });
+
+  client.on("close", function(){ setConn(false); });
+  client.on("error", function(){ setConn(false); });
+
+  client.on("message", function(topic, payload){
+    const val = parseFloat(payload.toString());
+    if(isNaN(val)) return;
+
+    if(topic === TOPIC_TEMP){
+      lastTemp = val;
+      $curTemp.textContent = val.toFixed(1) + "°C";
+    }
+    if(topic === TOPIC_HUM){
+      lastHum = val;
+      $curHum.textContent = val.toFixed(1) + "%";
+    }
+
+    if(lastTemp !== null && lastHum !== null){
+      pushPoint();
+      updateRisk();
+    }
+  });
+})();
+</script>
+</body>
+</html>
