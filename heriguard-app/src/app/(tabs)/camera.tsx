@@ -1,21 +1,19 @@
 import { useState } from "react";
-import { View, Text, Image, ScrollView, Dimensions, StyleSheet } from "react-native";
+import { View, Text, Image, ScrollView, useWindowDimensions, StyleSheet } from "react-native";
 import { useDeviceStore } from "@/store/deviceStore";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { PlaqueCard } from "@/components/shared/PlaqueCard";
 import { Colors, Font } from "@/constants/theme";
 
-const screenWidth = Dimensions.get("window").width;
-
 export default function CameraScreen() {
   const [activeIndex, setActiveIndex] = useState(0);
+  const { width: screenWidth } = useWindowDimensions();
   const imageHistory = useDeviceStore((s) => s.imageHistory);
-  const latestImage = useDeviceStore((s) => s.latestImage);
   const temp = useDashboardStore((s) => s.currentTemp);
   const humidity = useDashboardStore((s) => s.currentHumidity);
 
-  const images = imageHistory.length > 0 ? imageHistory : [];
-  const current = images[activeIndex];
+  const images = imageHistory;
+  const current = images[activeIndex] ?? null;
 
   const slideWidth = screenWidth - 56;
 

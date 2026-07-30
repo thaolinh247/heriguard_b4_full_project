@@ -7,8 +7,8 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Alert,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { PlaqueCard } from "@/components/shared/PlaqueCard";
 import { useSettingsStore } from "@/store/settingsStore";
 import { useDeviceStore } from "@/store/deviceStore";
@@ -16,6 +16,7 @@ import { startMockBle, stopMockBle } from "@/lib/mockBle";
 import { Colors, Font } from "@/constants/theme";
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const mockMode = useSettingsStore((s) => s.mockMode);
   const bleDeviceName = useSettingsStore((s) => s.bleDeviceName);
   const stationId = useSettingsStore((s) => s.stationId);
@@ -38,7 +39,7 @@ export default function SettingsScreen() {
   };
 
   const handleScan = () => {
-    Alert.alert("Quét BLE", "Chức năng quét BLE thật sẽ được implement sau. Dùng chế độ mô phỏng để test.");
+    router.push("/device/scan" as any);
   };
 
   const statusLabel: Record<string, { text: string; color: string }> = {

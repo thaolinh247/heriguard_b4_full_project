@@ -18,7 +18,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   bleDeviceName: "HERI-GUARD-01",
   stationId: "#01",
   geminiApiKey: "",
-  geminiMockMode: true,
+  geminiMockMode: false,
   setMockMode: (enabled) => set({ mockMode: enabled }),
   setBleDeviceName: (name) => set({ bleDeviceName: name }),
   setStationId: (id) => set({ stationId: id }),

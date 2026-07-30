@@ -1,6 +1,6 @@
-import type { GeminiAnalysis, GeminiFinding } from "@/types/gemini";
+import type { GeminiAnalysis, GeminiFinding, TrendAnalysis, TrendDataPoint } from "@/types/gemini";
 
-const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+const API_BASE = "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent";
 
 interface Part {
   text?: string;
@@ -38,9 +38,11 @@ Trả về JSON hợp lệ (KHÔNG markdown, KHÔNG code block, chỉ JSON thu�
   "correlations": [
     "các mối liên hệ giữa môi trường và hư hại"
   ],
-  "recommendations": [
-    "khuyến nghị hành động cụ thể"
-  ]
+  "conditionAssessment": {
+    "severity": "Tốt | Cần theo dõi | Nguy hiểm",
+    "assessment": "đánh giá tổng thể tình trạng dựa trên phân tích, có cần hỗ trợ không",
+    "needsSupport": true/false
+  }
 }`;
 }
 
@@ -82,31 +84,105 @@ export async function analyzeWithGemini(
 
 export async function imageToBase64(uri: string): Promise<string | null> {
   try {
-    // Web: blob URL → fetch → base64
-    if (uri.startsWith("blob:") || uri.startsWith("http")) {
+    // blob: → web-only, use fetch (no RN Blob warning on web)
+    if (uri.startsWith("blob:")) {
       const resp = await fetch(uri);
       const blob = await resp.blob();
-      return new Promise((resolve, reject) => {
+      return await new Promise((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => {
           const result = reader.result as string;
           resolve(result.split(",")[1]);
         };
-        reader.onerror = reject;
+        reader.onerror = () => resolve(null);
         reader.readAsDataURL(blob);
       });
     }
 
-    // Native: file:// URI → expo-file-system
-    const fs = await import("expo-file-system");
-    const legacy = await import("expo-file-system/legacy");
-    const base64 = await legacy.readAsStringAsync(uri, {
-      encoding: fs.EncodingType.Base64,
+    const legacyFs = await import("expo-file-system/legacy");
+
+    // http: → download to temp then read (avoids RN Blob warning)
+    if (uri.startsWith("http")) {
+      const dest = legacyFs.cacheDirectory + "gemini_" + Date.now() + ".jpg";
+      const dl = await legacyFs.downloadAsync(uri, dest);
+      const base64 = await legacyFs.readAsStringAsync(dl.uri, {
+        encoding: legacyFs.EncodingType.Base64,
+      });
+      await legacyFs.deleteAsync(dest, { idempotent: true });
+      return base64;
+    }
+
+    // file: → read directly
+    const base64 = await legacyFs.readAsStringAsync(uri, {
+      encoding: legacyFs.EncodingType.Base64,
     });
     return base64;
   } catch {
     return null;
   }
+}
+
+function buildTrendPrompt(points: TrendDataPoint[]): string {
+  const data = points.map((p, i) =>
+    `[${i + 1}] ${p.timestamp} — ${p.temp}°C, ${p.humidity}%, phát hiện: ${p.detections.length === 0 ? "không" : p.detections.map(d => `${d.label}(${(d.confidence * 100).toFixed(0)}%)`).join(", ")}`
+  ).join("\n");
+
+  return `Bạn là chuyên gia AI phân tích xu hướng bảo tồn di tích văn hóa. Hãy phân tích XU HƯỚNG dữ liệu tuần tra từ robot HERI-GUARD dựa trên các điểm dữ liệu sau:
+
+DỮ LIỆU LỊCH SỬ (${points.length} điểm):
+${data}
+
+Hãy đánh giá xu hướng tổng thể dựa trên sự thay đổi theo thời gian của nhiệt độ, độ ẩm và các phát hiện.
+
+Trả về JSON hợp lệ (KHÔNG markdown, KHÔNG code block, chỉ JSON thuần) theo cấu trúc:
+{
+  "direction": "improving | stable | deteriorating",
+  "summary": "tóm tắt 1-2 câu về xu hướng tổng thể",
+  "tempTrend": "đánh giá xu hướng nhiệt độ (tăng/giảm/ổn định, bất thường không)",
+  "humidityTrend": "đánh giá xu hướng độ ẩm (tăng/giảm/ổn định, bất thường không)",
+  "detectionTrend": "xu hướng phát hiện hư hại (tăng/giảm/ổn định)",
+  "insights": ["nhận định chuyên sâu 1", "nhận định chuyên sâu 2"],
+  "recommendations": ["khuyến nghị 1", "khuyến nghị 2"]
+}`;
+}
+
+export async function analyzeTrendsWithGemini(
+  apiKey: string,
+  points: TrendDataPoint[]
+): Promise<TrendAnalysis> {
+  const parts: Part[] = [
+    { text: buildTrendPrompt(points) },
+  ];
+
+  const response = await fetch(`${API_BASE}?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contents: [{ parts }] }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Gemini API error ${response.status}: ${errText}`);
+  }
+
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Gemini: empty response");
+
+  let cleaned = text.trim();
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (jsonMatch) cleaned = jsonMatch[0];
+  const parsed = JSON.parse(cleaned);
+
+  return {
+    direction: parsed.direction ?? "stable",
+    summary: parsed.summary ?? "",
+    tempTrend: parsed.tempTrend ?? "",
+    humidityTrend: parsed.humidityTrend ?? "",
+    detectionTrend: parsed.detectionTrend ?? "",
+    insights: parsed.insights ?? [],
+    recommendations: parsed.recommendations ?? [],
+  };
 }
 
 function parseResponse(text: string): GeminiAnalysis {
@@ -127,6 +203,10 @@ function parseResponse(text: string): GeminiAnalysis {
     })),
     envAssessment: parsed.envAssessment ?? "",
     correlations: parsed.correlations ?? [],
-    recommendations: parsed.recommendations ?? [],
+    conditionAssessment: parsed.conditionAssessment ?? {
+      severity: "Không xác định",
+      assessment: "Không đủ dữ liệu để đánh giá.",
+      needsSupport: false,
+    },
   };
 }

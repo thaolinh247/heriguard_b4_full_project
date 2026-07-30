@@ -2,7 +2,7 @@ import { Tabs } from "expo-router";
 import { Image } from "react-native";
 import { Colors, Font } from "@/constants/theme";
 
-const logo = require("../../../assets/images/novaculture.jpg");
+const logo = require("../../../assets/images/novaculture.png");
 
 function TabIcon() {
   return (
@@ -30,7 +30,7 @@ export default function TabsLayout() {
           backgroundColor: Colors.paper,
           borderTopColor: Colors.line,
           borderTopWidth: 1,
-          height: 70,
+          height: 105,
           paddingBottom: 14,
           paddingTop: 6,
         },

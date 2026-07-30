@@ -24,7 +24,7 @@ export function StatusCard() {
       {/* Camera frame */}
       <View className="rounded-sm overflow-hidden aspect-[4/3] mb-4" style={{ backgroundColor: Colors.jadeLight }}>
         <Image
-          source={require("@/assets/images/tutorial-web.png")}
+          source={require("@/assets/images/heritage-cracks/crack-1.jpg")}
           className="w-full h-full"
           resizeMode="cover"
         />

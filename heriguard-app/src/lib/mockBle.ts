@@ -1,3 +1,4 @@
+import { Image } from "react-native";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { useDeviceStore, type CameraImage } from "@/store/deviceStore";
 import { usePatrolStore } from "@/store/patrolStore";
@@ -13,13 +14,35 @@ function randomInRange(min: number, max: number): number {
   return Math.round((Math.random() * (max - min) + min) * 10) / 10;
 }
 
+const MOCK_IMAGE_MODULES = [
+  require("@/assets/images/heritage-cracks/crack-1.jpg"),
+  require("@/assets/images/heritage-cracks/crack-2.jpg"),
+  require("@/assets/images/heritage-cracks/crack-3.jpg"),
+  require("@/assets/images/heritage-cracks/crack-4.jpg"),
+  require("@/assets/images/heritage-cracks/crack-5.jpg"),
+  require("@/assets/images/heritage-cracks/crack-6.jpg"),
+  require("@/assets/images/heritage-cracks/crack-7.jpg"),
+];
+
+let resolvedUris: string[] | null = null;
+let mockImageIndex = 0;
+
+function getMockUri(): string {
+  if (!resolvedUris) {
+    resolvedUris = MOCK_IMAGE_MODULES.map((mod) => Image.resolveAssetSource(mod).uri);
+  }
+  const uri = resolvedUris[mockImageIndex % resolvedUris.length];
+  mockImageIndex++;
+  return uri;
+}
+
 function generateMockImage(temp: number, humidity: number): CameraImage {
   const now = new Date();
   const timeStr = now.toLocaleTimeString("vi-VN");
   const dateStr = now.toLocaleDateString("vi-VN");
   return {
     id: `mock-${Date.now()}`,
-    uri: `https://picsum.photos/320/240?random=${Date.now()}`,
+    uri: getMockUri(),
     timestamp: `${dateStr} ${timeStr}`,
     temp,
     humidity,

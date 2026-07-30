@@ -12,7 +12,7 @@ import { useDashboardStore } from "@/store/dashboardStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { Colors, Font } from "@/constants/theme";
 
-const logo = require("../../../assets/images/novaculture.jpg");
+const logo = require("../../../assets/images/novaculture.png");
 
 export default function HomeScreen() {
   const mockMode = useSettingsStore((s) => s.mockMode);

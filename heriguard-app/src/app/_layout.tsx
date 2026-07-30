@@ -2,10 +2,13 @@ import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
+import { useNotification } from "@/hooks/useNotification";
+import "../../global.css";
 
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
+  useNotification();
   const [fontsLoaded] = useFonts({
     Helvetica: require("../../assets/helvetica-255/Helvetica.ttf"),
     "Helvetica-Bold": require("../../assets/helvetica-255/Helvetica-Bold.ttf"),

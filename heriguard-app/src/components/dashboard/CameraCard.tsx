@@ -1,6 +1,7 @@
 import { View, Text, Image, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import { useDashboardStore } from "@/store/dashboardStore";
+import { useDeviceStore } from "@/store/deviceStore";
 import { useCountUp } from "@/hooks/useCountUp";
 import { PlaqueCard } from "@/components/shared/PlaqueCard";
 import { Colors, Font } from "@/constants/theme";
@@ -10,24 +11,40 @@ export function CameraCard() {
   const temp = useDashboardStore((s) => s.currentTemp);
   const humidity = useDashboardStore((s) => s.currentHumidity);
   const lastUpdate = useDashboardStore((s) => s.lastUpdate);
+  const latestImage = useDeviceStore((s) => s.latestImage);
 
   const displayTemp = useCountUp(temp, 600);
   const displayHumidity = useCountUp(humidity, 600);
+  const hasRealImage = latestImage?.uri && latestImage.uri.length > 0;
 
   return (
     <PlaqueCard label="Ghi hình hiện trường" style={styles.card}>
       <View style={styles.touchable} onTouchEnd={() => router.push("/(tabs)/camera")}>
         {/* Camera frame */}
         <View style={styles.frame}>
-          <Image
-            source={require("@/assets/images/tutorial-web.png")}
-            style={styles.image}
-            resizeMode="cover"
-          />
+          {hasRealImage ? (
+            <Image source={{ uri: latestImage.uri }} style={styles.image} resizeMode="cover" />
+          ) : (
+            <Image
+              source={require("@/assets/images/heritage-cracks/crack-1.jpg")}
+              style={styles.image}
+              resizeMode="cover"
+            />
+          )}
           {/* OSD overlay */}
           <View style={styles.osd}>
-            <Text style={styles.osdText}>{lastUpdate ?? "—"}</Text>
+            <Text style={styles.osdText}>{latestImage?.timestamp ?? lastUpdate ?? "—"}</Text>
           </View>
+          {/* Detection badges */}
+          {latestImage?.detections && latestImage.detections.length > 0 && (
+            <View style={styles.detectOverlay}>
+              {latestImage.detections.map((d, i) => (
+                <View key={i} style={[styles.detectBadge, { backgroundColor: d.confidence > 0.75 ? Colors.lacquer : Colors.gold }]}>
+                  <Text style={styles.detectText}>{d.label} {Math.round(d.confidence * 100)}%</Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         {/* Readings */}
@@ -80,6 +97,23 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Colors.cream,
     letterSpacing: 0.3,
+  },
+  detectOverlay: {
+    position: "absolute",
+    bottom: 8,
+    left: 8,
+    flexDirection: "row",
+    gap: 4,
+  },
+  detectBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 2,
+  },
+  detectText: {
+    fontFamily: Font.bold,
+    fontSize: 8,
+    color: Colors.paper,
   },
   readings: {
     flexDirection: "row",

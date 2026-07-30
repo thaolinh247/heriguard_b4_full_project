@@ -1,5 +1,6 @@
 import { BleManager, type Device } from "react-native-ble-plx";
 import { Platform, PermissionsAndroid } from "react-native";
+import { File, Directory, Paths } from "expo-file-system";
 import { useDeviceStore } from "@/store/deviceStore";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { usePatrolStore } from "@/store/patrolStore";
@@ -73,7 +74,7 @@ export function startScan(onDeviceFound: (device: Device) => void) {
     if (device && device.name?.includes("HERI-GUARD")) {
       onDeviceFound(device);
     }
-  });
+  }).catch(() => {});
 
   setTimeout(() => {
     m.stopDeviceScan();
@@ -97,6 +98,28 @@ let cameraChunks: number[][] = [];
 let cameraExpectedChunks = 0;
 let cameraFrameId = 0;
 
+function bytesToBase64Chunked(bytes: number[]): string {
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.slice(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+async function saveJpegBytes(jpegBytes: number[], frameId: number): Promise<string> {
+  const root = new Directory(Paths.document, "heriguard", "camera", "frames");
+  root.createDirectory("");
+  const name = `frame_${String(frameId).padStart(4, "0")}.jpg`;
+  const file = root.createFile(name, "image/jpeg");
+  const base64 = bytesToBase64Chunked(jpegBytes);
+  const fs = await import("expo-file-system");
+  const legacy = await import("expo-file-system/legacy");
+  await legacy.writeAsStringAsync(file.uri, base64, { encoding: fs.EncodingType.Base64 });
+  return file.uri;
+}
+
 function handleCameraChunk(data: number[]) {
   // Chunk format: [frameId(2), chunkIndex(2), totalChunks(2), ...payload]
   if (data.length < 6) return;
@@ -116,20 +139,19 @@ function handleCameraChunk(data: number[]) {
   const receivedCount = cameraChunks.filter((c) => c !== undefined).length;
   if (receivedCount === cameraExpectedChunks && cameraExpectedChunks > 0) {
     const jpegBytes = cameraChunks.flat();
-    const jpegData = new Uint8Array(jpegBytes);
-    const blob = new Blob([jpegData], { type: "image/jpeg" });
-    const uri = URL.createObjectURL(blob);
 
     const store = useDeviceStore.getState();
     const temp = useDashboardStore.getState().currentTemp ?? 0;
     const humidity = useDashboardStore.getState().currentHumidity ?? 0;
 
-    store.addImage({
-      id: `ble-${frameId}`,
-      uri,
-      timestamp: new Date().toLocaleTimeString("vi-VN"),
-      temp,
-      humidity,
+    saveJpegBytes(jpegBytes, cameraFrameId).then((uri) => {
+      store.addImage({
+        id: `ble-${cameraFrameId}`,
+        uri,
+        timestamp: new Date().toLocaleTimeString("vi-VN"),
+        temp,
+        humidity,
+      });
     });
 
     cameraChunks = [];
@@ -253,9 +275,10 @@ export async function connectToDevice(device: Device): Promise<boolean> {
     ];
 
     // Listen for disconnect
-    connected.onDisconnected(() => {
+    const disconnectSub = connected.onDisconnected(() => {
       disconnect();
     });
+    unsubscribers.push(() => disconnectSub.remove());
 
     useDashboardStore.getState().setBleConnected(true);
     return true;
