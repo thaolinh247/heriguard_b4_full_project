@@ -81,7 +81,7 @@ Service: 12345678-1234-5678-1234-56789abcdef0
 └── Map Data      (NOTIFY) ...def6  — [distance_marker][issue_type][confidence][temp][hum]
 ```
 
-> **Ghi chú:** `Map Data` (char ...def6) là characteristic **mới** — gửi từng marker trên bản đồ ảo mỗi khi robot inspect xong 1 điểm 0.5m. Cần thêm ở cả firmware và app.
+> **Ghi chú:** `Map Data` (char ...def6) là characteristic **mới** — gửi từng marker trên bản đồ ảo mỗi khi robot inspect xong 1 điểm 0.5m. ✅ Đã implement ở cả firmware (`sendMapMarker()`) và app (`handleMapMarker()`).
 
 ---
 
@@ -176,7 +176,7 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 
 ## 4. Chức năng & Công việc cần làm
 
-### 4.1 Robot — Firmware (`heriguard-b4/src/main.cpp`)
+### 4.1 Robot — Firmware (`heriguard-robot/src/main.cpp`)
 
 | # | Chức năng | Mô tả | Trạng thái |
 |---|-----------|-------|-----------|
@@ -187,13 +187,13 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 | 5 | **State machine** | PATROL_MOVE → A → BCD → E | ✅ Hoàn thành — `runStateMachine()` active |
 | 6 | **Line following PID** | Đọc Line Tracer error, PID → M3/M4 | ✅ Hoàn thành — `patrolMove()` active |
 | 7 | **Encoder đếm 0.5m** | `getDegrees()` → quy đổi mét | ✅ Hoàn thành — trong `patrolMove()` active |
-| 8 | **Junction detection** | `getJunctionType()` → rẽ | ◐ Trong comment block — `handleJunction()` chờ bỏ comment |
-| 9 | **Wide Scan (INSPECT_A)** | Chụp ảnh, đọc DHT, map marker | ✅ Hoàn thành — `inspectWide()` active |
-| 10 | **Close Approach (B)** | Laser đo khoảng, tiến 15-20cm | ◐ Trong comment block — `inspectCloseApproach()` chờ bỏ comment |
-| 11 | **Scan Low (C)** | RC3 hạ cam, RC4 góc thấp, RC1 pan | ◐ Trong comment block — `inspectScanLow()` chờ bỏ comment |
-| 12 | **Scan High (D)** | RC3 nâng cam, RC4 góc cao, RC1 pan | ◐ Trong comment block — `inspectScanHigh()` chờ bỏ comment |
-| 13 | **Servo control** | RC1-RC4 `setAngle()`, home position | ◐ Trong comment block — `servoHome()`, `servoPan()` chờ bỏ comment |
-| 14 | **Retract (E)** | Gập camera, căn line, về home | ✅ Hoàn thành — `inspectRetract()` active (đơn giản), `inspectRetractFull()` trong comment |
+| 8 | **Junction detection** | `getJunctionType()` → rẽ | ◐ Đã viết `handleJunction()` nhưng chưa gọi từ `patrolMove()` |
+| 9 | **Wide Scan (INSPECT_A)** | Chụp ảnh, đọc DHT, map marker | ◐ Đã chạy nhưng issue vẫn dùng `random()`; auto-capture + chuyển INSPECT_B còn comment |
+| 10 | **Close Approach (B)** | Laser đo khoảng, tiến 15-20cm | ◐ Code thật đã viết `inspectCloseApproach()`; case INSPECT_B chưa bật trong `runStateMachine()` |
+| 11 | **Scan Low (C)** | RC3 hạ cam, RC4 góc thấp, RC1 pan | ◐ Code thật đã viết `inspectScanLow()`; case INSPECT_C chưa bật, capture khi pan còn TODO |
+| 12 | **Scan High (D)** | RC3 nâng cam, RC4 góc cao, RC1 pan | ◐ Code thật đã viết `inspectScanHigh()`; case INSPECT_D chưa bật, capture khi pan còn TODO |
+| 13 | **Servo control** | RC1-RC4 `setAngle()`, home position | ◐ Đã viết `servoHome()`, `servoPan()`; chỉ dùng trong các scan functions chưa bật |
+| 14 | **Retract (E)** | Gập camera, căn line, về home | ✅ Hoàn thành — `inspectRetract()` active (đơn giản), `inspectRetractFull()` (đầy đủ) chưa dùng |
 | 15 | **Laser obstacle** | `getDistance()` < 200mm → dừng | ✅ Hoàn thành — `checkObstacle()` active |
 | 16 | **IMU** | `getAccelY()` → giảm tốc khi nghiêng | ✅ Hoàn thành — trong loop active |
 | 17 | **Virtual map** | Ghi marker sau mỗi inspect, gửi BLE | ✅ Hoàn thành — `sendMapMarker()` active |
@@ -206,18 +206,18 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 
 | # | Chức năng | File | Trạng thái |
 |---|-----------|------|-----------|
-| 1 | BLE scan + connect | `lib/ble.ts` | ✅ Hoàn thành cơ bản. Cần thêm subscribe charMapData + charDetection |
+| 1 | BLE scan + connect | `lib/ble.ts` | ✅ Hoàn thành — scan, connect, subscribe 5 chars (camera, sensor, status, detection, map) |
 | 2 | Sensor data receive | `lib/ble.ts` → `dashboardStore` | ✅ Hoàn thành |
-| 3 | Camera chunk reassembly | `lib/ble.ts` | ✅ Hoàn thành |
+| 3 | Camera chunk reassembly | `lib/ble.ts` | ✅ Hoàn thành — `saveJpegBytes()` lưu qua fileStorage |
 | 4 | Status data (battery + state) | `lib/ble.ts` → `deviceStore` | ✅ Hoàn thành |
-| 5 | **Map data handler** | `lib/ble.ts` → `patrolStore` | ⬜ Cần thêm — parse MapMarker từ charMapData |
-| 6 | **ControlPanel component** | `components/dashboard/ControlPanel.tsx` | ⬜ Cần tạo mới — 3 nút Start/Capture/Stop |
-| 7 | **StateIndicator component** | `components/dashboard/StateIndicator.tsx` | ⬜ Cần tạo mới — badge trạng thái robot |
-| 8 | **VirtualMap component** | `components/dashboard/VirtualMap.tsx` | ⬜ Cần tạo mới — trực quan hóa map markers |
+| 5 | **Map data handler** | `lib/ble.ts` → `patrolStore` | ✅ Hoàn thành — `handleMapMarker()` parse 9 bytes → patrolStore |
+| 6 | **ControlPanel component** | `components/dashboard/ControlPanel.tsx` | ✅ Hoàn thành — Start/Capture/Stop, gửi lệnh P/C/X |
+| 7 | **StateIndicator component** | `components/dashboard/StateIndicator.tsx` | ✅ Hoàn thành — badge trạng thái robot |
+| 8 | **VirtualMap component** | `components/dashboard/VirtualMap.tsx` | ✅ Hoàn thành — trực quan hóa map markers |
 | 9 | **patrolStore** | `store/patrolStore.ts` | ✅ Hoàn thành |
 | 10 | **deviceStore sửa** | `store/deviceStore.ts` | ✅ Hoàn thành — đã thêm `robotState`, `patrolActive`, `CameraImage` |
-| 11 | **Dashboard sửa** | `app/(tabs)/index.tsx` | ⬜ Cần sửa — thêm ControlPanel + StateIndicator + VirtualMap |
-| 12 | **Camera tab sửa** | `app/(tabs)/camera.tsx` | ⬜ Cần sửa — thêm markers từ virtual map lên ảnh |
+| 11 | **Dashboard sửa** | `app/(tabs)/index.tsx` | ✅ Hoàn thành — tích hợp StateIndicator + ControlPanel + VirtualMap + CameraCard + MiniChart + TrendSummary |
+| 12 | **Camera tab sửa** | `app/(tabs)/camera.tsx` | ✅ Hoàn thành — carousel ảnh + bounding box overlay theo `img.detections` |
 | 13 | **History tab sửa** | `app/(tabs)/history.tsx` | ✅ Hoàn thành — kết nối patrolStore + detectionStore |
 | 14 | **AI tab sửa** | `app/(tabs)/ai.tsx` | ✅ Hoàn thành — tích hợp Gemini API |
 | 15 | **Settings tab** | `app/(tabs)/settings.tsx` | ✅ Hoàn thành — BLE mock mode + Gemini API key + scan button |
@@ -225,7 +225,7 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 | 17 | **Types sửa** | `types/robot.ts` | ✅ Hoàn thành — thêm `RobotState`, `MapMarker`, `PatrolSession`, `Alert` mở rộng |
 | 18 | **Alert system** | `store/alertStore.ts` | ✅ Hoàn thành — `triggerFromDetection()`, `dismissAlert()`, `dismissAll()` |
 | 19 | **Notification** | `hooks/useNotification.ts` | ✅ Hoàn thành — expo-notifications khi high risk |
-| 20 | **BLE detection char** | `lib/ble.ts` | ⬜ Cần thêm — subscribe CHAR_DETECTION |
+| 20 | **BLE detection char** | `lib/ble.ts` | ✅ Hoàn thành — `handleDetectionData()` subscribe CHAR_DETECTION |
 
 ### 4.3 Camera — OpenMV Script (`main.py` trên M-Vision Cam)
 
@@ -241,33 +241,25 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 ## 5. Các bước thực hiện (Phases)
 
 > **Tổng quan tiến độ:**
-> - ✅ Phase 1 (BLE + Sensor): **Hoàn thành**
+> - ✅ Phase 1 (BLE + Sensor): **Hoàn thành** — cả app lẫn firmware
 > - ✅ Phase 4 (Camera JPEG + UART): **Hoàn thành**
 > - ✅ Phase 5 (Alert + Notification): **Hoàn thành**
 > - ✅ Phase 7 (Gemini AI): **Hoàn thành**
-> - ◐ Phase 2 (Patrol + State Machine): **Cơ bản — junction + BCD chờ bỏ comment**
-> - ◐ Phase 3 (Scan Low/High + Servo): **Viết sẵn trong comment, chờ bỏ comment + test**
+> - ◐ Phase 2 (Patrol + State Machine): **Cơ bản — junction viết sẵn chưa gọi; case INSPECT_B/C/D còn comment**
+> - ◐ Phase 3 (Scan Low/High + Servo): **Code thật đã viết, chưa bật trong state machine + chưa capture khi pan**
 > - ⬜ Phase 6 (Testing + Demo): **Chưa làm**
 
 ### Phase 1: BLE Foundation + Sensor — ✅ **Hoàn thành**
 
-Tất cả Firmware tasks (BLE server, DHT, Battery, Command, OLED, LED/Buzzer) đã hoạt động. App tasks (BLE scan, sensor data, device store, types, mock BLE) đã hoàn thành. Còn ControlPanel + StateIndicator + Dashboard layout refinement.
-
-#### App còn thiếu
-
-| Task | File | Chi tiết |
-|------|------|----------|
-| ControlPanel | `src/components/dashboard/ControlPanel.tsx` | **Cần tạo mới**: nút Start/Capture/Stop |
-| StateIndicator | `src/components/dashboard/StateIndicator.tsx` | **Cần tạo mới**: badge trạng thái robot |
-| Dashboard sửa | `src/app/(tabs)/index.tsx` | **Cần sửa**: thêm ControlPanel + StateIndicator vào layout |
+Toàn bộ Firmware tasks (BLE server, DHT, Battery, Command, OLED, LED/Buzzer) đã hoạt động. App tasks (BLE scan, sensor data, map/detection handler, ControlPanel, StateIndicator, VirtualMap, dashboard layout) đã hoàn thành.
 
 ---
 
-### Phase 2: Patrol + State Machine — ✅ **Cơ bản, cần bỏ comment BCD**
+### Phase 2: Patrol + State Machine — ◐ **Cơ bản, cần bỏ comment BCD**
 
 #### Firmware — đã hoạt động
 - Line Tracer init + PID controller + Encoder 0.5m + State machine + INSPECT_A + INSPECT_E + Laser obstacle + Virtual map + IMU
-- `handleJunction()` viết trong comment, chưa gọi từ loop
+- `handleJunction()` đã viết nhưng chưa gọi từ `patrolMove()`
 
 #### Firmware — cần bỏ comment
 | Task | File | Chi tiết |
@@ -277,33 +269,27 @@ Tất cả Firmware tasks (BLE server, DHT, Battery, Command, OLED, LED/Buzzer) 
 | INSPECT_C → runStateMachine | `src/main.cpp` | Bỏ comment case INSPECT_C |
 | INSPECT_D → runStateMachine | `src/main.cpp` | Bỏ comment case INSPECT_D |
 
-#### App còn thiếu
-
-| Task | File | Chi tiết |
-|------|------|----------|
-| Map data handler | `src/lib/ble.ts` | Subscribe charMapData, parse → patrolStore |
-| VirtualMap | `src/components/dashboard/VirtualMap.tsx` | **Cần tạo mới**: timeline markers theo distance |
-| Dashboard sửa | `src/app/(tabs)/index.tsx` | Thêm VirtualMap card |
+#### App — ✅ Đã hoàn thành (Map handler + VirtualMap + Dashboard)
 
 ---
 
-### Phase 3: Scan Low/High + Servo — ◐ **Viết trong comment, chờ test**
+### Phase 3: Scan Low/High + Servo — ◐ **Code đã viết, chưa bật trong state machine**
 
 #### Firmware
 | Task | File | Trạng thái |
 |------|------|-----------|
-| INSPECT_B | `src/main.cpp` | ✅ `inspectCloseApproach()` trong comment |
-| INSPECT_C | `src/main.cpp` | ✅ `inspectScanLow()` trong comment |
-| INSPECT_D | `src/main.cpp` | ✅ `inspectScanHigh()` trong comment |
-| Servo angles | `src/main.cpp` | ✅ `servoHome()`, `servoPan()` trong comment |
-| SmartCamReader | `src/main.cpp` | ✅ `captureAndSendDetection()` trong comment |
+| INSPECT_B | `src/main.cpp` | ✅ Code thật `inspectCloseApproach()` đã viết; case chưa bật |
+| INSPECT_C | `src/main.cpp` | ✅ Code thật `inspectScanLow()` đã viết; case chưa bật + capture TODO |
+| INSPECT_D | `src/main.cpp` | ✅ Code thật `inspectScanHigh()` đã viết; case chưa bật + capture TODO |
+| Servo angles | `src/main.cpp` | ✅ Code thật `servoHome()`, `servoPan()` đã viết |
+| SmartCamReader | `src/main.cpp` | ◐ `captureAndSendDetection()` trong comment block |
 
 #### App
 | Task | File | Trạng thái |
 |------|------|-----------|
-| Detection handler | `src/lib/ble.ts` | ⬜ Cần thêm subscribe charDetection |
+| Detection handler | `src/lib/ble.ts` | ✅ Hoàn thành — subscribe charDetection |
 | Detection store | `src/store/detectionStore.ts` | ✅ Hoàn thành |
-| Camera tab | `src/app/(tabs)/camera.tsx` | ⬜ Cần sửa — bounding box overlay |
+| Camera tab | `src/app/(tabs)/camera.tsx` | ✅ Hoàn thành — bounding box overlay |
 
 ---
 
@@ -311,11 +297,7 @@ Tất cả Firmware tasks (BLE server, DHT, Battery, Command, OLED, LED/Buzzer) 
 
 Tất cả firmware tasks (Camera UART, JPEG chunker, BLE notify, CRC check) + camera script (JPEG send, crack detect, 921600 baud, UART trigger) đã hoạt động. App tasks (JPEG reassembly) đã có.
 
-#### App còn thiếu
-| Task | File | Chi tiết |
-|------|------|----------|
-| File storage | `src/lib/fileStorage.ts` | **Cần tạo mới**: lưu JPEG bằng expo-file-system |
-| Camera tab | `src/app/(tabs)/camera.tsx` | **Cần sửa**: load ảnh từ file system |
+#### App — ✅ Đã hoàn thành (fileStorage + Camera tab load ảnh + bbox overlay)
 
 ---
 
@@ -325,7 +307,7 @@ Tất cả firmware tasks (Camera UART, JPEG chunker, BLE notify, CRC check) + c
 |------|------|-----------|
 | Alert system | `src/store/alertStore.ts` | ✅ Hoàn thành — `triggerFromDetection()`, `dismissAlert()`, `dismissAll()` |
 | Local notification | `src/hooks/useNotification.ts` | ✅ Hoàn thành — expo-notifications khi high risk |
-| Alert tab | `src/app/(tabs)/alerts.tsx` | ⬜ Có thể bổ sung thêm nếu cần |
+| Alert tab | `src/app/(tabs)/alerts.tsx` | ⬜ Chưa có màn hình alerts riêng — cảnh báo hiện qua notification (Tabs hiện tại: Trang chủ, Camera, Biểu đồ, AI, Lịch sử, Cài đặt) |
 
 ---
 
@@ -359,7 +341,7 @@ Tất cả firmware tasks (Camera UART, JPEG chunker, BLE notify, CRC check) + c
 
 ## 6. Tổng hợp files thay đổi
 
-### 6.1 Firmware — `heriguard-b4/`
+### 6.1 Firmware — `heriguard-robot/` (trước đây `heriguard-b4/`)
 
 | File | Thay đổi |
 |------|---------|
@@ -383,7 +365,7 @@ Tất cả firmware tasks (Camera UART, JPEG chunker, BLE notify, CRC check) + c
 | `lib/mockBle.ts` | **Sửa** — mock state + map data |
 | `types/robot.ts` | **Sửa** — thêm `RobotState`, `MapMarker`, `PatrolSession` |
 | `app/(tabs)/index.tsx` | **Sửa** — thêm ControlPanel + StateIndicator + VirtualMap |
-| `app/(tabs)/camera.tsx` | **Sửa** — bounding box overlay, markers từ map |
+| `app/(tabs)/camera.tsx` | **Sửa** — bounding box overlay theo `img.detections` |
 | `app/(tabs)/ai.tsx` | **Sửa** — phân tích dựa trên detection thật |
 | `app/(tabs)/history.tsx` | **Sửa** — patrol history + filter |
 | `app/(tabs)/settings.tsx` | **Sửa** — thêm BLE scan UI |
