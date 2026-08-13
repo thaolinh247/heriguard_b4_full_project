@@ -68,12 +68,15 @@ export default function ScanScreen() {
     setConnectingId(device.id);
     setError(null);
     stopScan();
-    const ok = await connectToDevice(device);
-    if (ok) {
+    const result = await connectToDevice(device);
+    if (result.ok) {
       router.back();
     } else {
       setConnectingId(null);
-      setError(`Không thể kết nối tới ${device.name ?? "HERI-GUARD"}. Thử lại.`);
+      setError(
+        result.error ??
+          `Không thể kết nối tới ${device.name ?? "HERI-GUARD"}. Thử lại.`
+      );
     }
   };
 

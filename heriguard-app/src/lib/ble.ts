@@ -1,6 +1,7 @@
 import { BleManager, State, type Device } from "react-native-ble-plx";
 import { Platform, PermissionsAndroid, Linking } from "react-native";
-import { Directory, Paths } from "expo-file-system";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Directory, File, Paths } from "expo-file-system";
 import { useDeviceStore } from "@/store/deviceStore";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { usePatrolStore } from "@/store/patrolStore";
@@ -25,6 +26,69 @@ function getManager(): BleManager | null {
     }
   }
   return manager;
+}
+
+// ── Helpers ─────────────────────────────────────────────────
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout sau ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+function mapBleError(error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error);
+  const m = msg.toLowerCase();
+  if (m.includes("timeout")) {
+    return "Kết nối quá lâu (timeout). Kiểm tra khoảng cách và bật lại robot.";
+  }
+  if (m.includes("not connected")) {
+    return "Không truy cập được robot — thiết bị có thể đã tắt hoặc rời khỏi phạm vi BLE. Kiểm tra LED robot rồi thử lại.";
+  }
+  if (m.includes("cancel")) {
+    return "Kết nối bị huỷ bởi hệ thống. Hãy quên thiết bị HERI-GUARD trong Cài đặt Bluetooth rồi thử lại.";
+  }
+  if (m.includes("service") && m.includes("not found")) {
+    return "Không tìm thấy service trên robot. Hãy xoá thiết bị cũ trong Bluetooth rồi quét lại.";
+  }
+  if (m.includes("disconnect") || m.includes("connection") || m.includes("device")) {
+    return "Kết nối bị rớt. Hãy thử lại; nếu vẫn lỗi, rút nguồn robot vài giây rồi bật lại.";
+  }
+  if (m.includes("permission")) {
+    return "Chưa được cấp quyền Bluetooth. Hãy cấp quyền rồi thử lại.";
+  }
+  return msg;
+}
+
+export interface ConnectResult {
+  ok: boolean;
+  error?: string;
+}
+
+// Thiết bị đã kết nối gần nhất — dùng để tự kết nối lại khi mở app
+const LAST_DEVICE_KEY = "heriguard:lastDevice";
+
+async function saveLastDevice(device: Device) {
+  try {
+    await AsyncStorage.setItem(
+      LAST_DEVICE_KEY,
+      JSON.stringify({
+        id: device.id,
+        name: device.name ?? device.localName ?? "HERI-GUARD",
+      })
+    );
+  } catch {
+    // không quan trọng — chỉ dùng để auto-reconnect
+  }
 }
 
 // ── Permissions ──────────────────────────────────────────────
@@ -178,9 +242,18 @@ function bytesToBase64Chunked(bytes: number[]): string {
 
 async function saveJpegBytes(jpegBytes: number[], frameId: number): Promise<string> {
   const root = new Directory(Paths.document, "heriguard", "camera", "frames");
-  root.createDirectory("");
+  // createDirectory("") sai API — create() với intermediates tạo đủ chuỗi
+  // heriguard/camera/frames, idempotent để gọi lại nhiều lần không lỗi
+  root.create({ intermediates: true, idempotent: true });
   const name = `frame_${String(frameId).padStart(4, "0")}.jpg`;
-  const file = root.createFile(name, "image/jpeg");
+  let file: File;
+  try {
+    file = root.createFile(name, "image/jpeg");
+  } catch {
+    // frameId lặp lại (firmware reset) — xoá file cũ rồi tạo mới
+    new File(root, name).delete();
+    file = root.createFile(name, "image/jpeg");
+  }
   const base64 = bytesToBase64Chunked(jpegBytes);
   const fs = await import("expo-file-system");
   const legacy = await import("expo-file-system/legacy");
@@ -287,6 +360,15 @@ function handleMapMarker(data: number[]) {
     timestamp: data[7] | (data[8] << 8),
   };
   usePatrolStore.getState().addMarker(marker);
+  // Lưu nhiệt độ/độ ẩm tại điểm kiểm tra vào phiên tuần tra — BLE thật
+  // trước đây chỉ thêm marker, phiên tuần tra không bao giờ có sensor log
+  usePatrolStore
+    .getState()
+    .addSensorLog({
+      timestamp: new Date().toISOString(),
+      temperature: marker.temperature,
+      humidity: marker.humidity,
+    });
 }
 
 function parseCharacteristicData(base64Value: string): number[] {
@@ -305,36 +387,97 @@ function subscribeToCharacteristic(
 ): () => void {
   let active = true;
 
-  device
-    .readCharacteristicForService(SERVICE_UUID, charUuid)
-    .then(() =>
-      device.monitorCharacteristicForService(SERVICE_UUID, charUuid, (error, characteristic) => {
-        if (error || !characteristic?.value || !active) return;
-        const bytes = parseCharacteristicData(characteristic.value);
-        onData(bytes);
-      })
-    )
-    .catch(() => {});
+  // Monitor TRỰC TIẾP — không gating qua read. Nếu read thất bại (ví dụ
+  // charCamera 512 bytes, long read lỗi trên Android), monitor sẽ không bao
+  // giờ được gọi → app không nhận bất kỳ notification nào (ảnh, sensor,
+  // status, detection, map marker).
+  device.monitorCharacteristicForService(SERVICE_UUID, charUuid, (error, characteristic) => {
+    if (error || !characteristic?.value || !active) return;
+    if (error) console.warn("BLE monitor error for", charUuid, error);
+    const bytes = parseCharacteristicData(characteristic.value);
+    onData(bytes);
+  });
 
   return () => {
     active = false;
   };
 }
 
-export async function connectToDevice(device: Device): Promise<boolean> {
+// BleErrorCode (react-native-ble-plx) — dùng để phân biệt lỗi thay vì
+// so khớp chuỗi message, vì message có thể khác nhau giữa Android/tạo mới
+const BLE_EC_DEVICE_ALREADY_CONNECTED = 5;
+const BLE_EC_DEVICE_NOT_CONNECTED = 6;
+
+function isBleErrorCode(error: unknown, code: number): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "errorCode" in error &&
+    (error as { errorCode?: unknown }).errorCode === code
+  );
+}
+
+// Chống hai luồng connect chạy song song (auto-reconnect + người dùng bấm
+// Kết nối trong scan screen). Luồng thứ hai nếu chạy cùng lúc sẽ huỷ kết nối
+// của luồng thứ nhất → báo lỗi "Device is not connected".
+let connectInFlight: Promise<ConnectResult> | null = null;
+
+export function connectToDevice(device: Device): Promise<ConnectResult> {
+  if (connectInFlight) return connectInFlight;
+  connectInFlight = doConnectToDevice(device).finally(() => {
+    connectInFlight = null;
+  });
+  return connectInFlight;
+}
+
+async function doConnectToDevice(device: Device): Promise<ConnectResult> {
   const store = useDeviceStore.getState();
   store.setConnectionStatus("connecting");
 
   try {
-    const connected = await device.connect();
-    await connected.discoverAllServicesAndCharacteristics();
+    let connected: Device;
+    try {
+      if (await device.isConnected()) {
+        // Đã kết nối rồi (ví dụ: toggle mock bật/tắt không reset kết nối thật) —
+        // dùng thẳng device hiện tại. connect() lại trên device đã connected sẽ
+        // báo lỗi và nếu gọi cancelConnection() sẽ giết luôn kết nối đang sống.
+        connected = device;
+      } else {
+        connected = await withTimeout(device.connect({ timeout: 10000 }), 12000);
+      }
+    } catch (connectError) {
+      // isConnected có thể bị stale (kết nối rớt mà Android chưa báo event,
+      // hoặc device object cũ sau reload). Nếu thực tế vẫn connected theo
+      // Android (errorCode 5 = already connected) → dùng thẳng, KHÔNG cancel.
+      if (isBleErrorCode(connectError, BLE_EC_DEVICE_ALREADY_CONNECTED)) {
+        connected = device;
+      } else {
+        throw connectError;
+      }
+    }
+
+    // Discover — kết nối có thể rớt ngay sau khi connect() resolve
+    // ("Device is not connected": chip robot reset, hết pin, quá xa...).
+    // Thử kết nối lại từ đầu 1 lần trước khi báo lỗi.
+    try {
+      await withTimeout(connected.discoverAllServicesAndCharacteristics(), 10000);
+    } catch (discoverError) {
+      const dropped =
+        isBleErrorCode(discoverError, BLE_EC_DEVICE_NOT_CONNECTED) ||
+        isBleErrorCode(discoverError, 2); // OperationTimedOut
+      if (!dropped) throw discoverError;
+
+      console.warn("BLE discover failed, retrying connect once:", discoverError);
+      await connected.cancelConnection().catch(() => {});
+      connected = await withTimeout(device.connect({ timeout: 10000 }), 12000);
+      await withTimeout(connected.discoverAllServicesAndCharacteristics(), 10000);
+    }
 
     if (Platform.OS === "android") {
-      try {
-        await connected.requestMTU(512);
-      } catch {
-        // MTU negotiation failure is not fatal; sensor/status data still works
-      }
+      // Không await — requestMTU có thể treo vĩnh viễn trên một số máy Android
+      connected.requestMTU(512).catch(() => {
+        // MTU thất bại không ảnh hưởng lệnh điều khiển; hoạt động ở MTU 242 mặc định
+      });
     }
 
     connectedDevice = connected;
@@ -357,11 +500,18 @@ export async function connectToDevice(device: Device): Promise<boolean> {
     unsubscribers.push(() => disconnectSub.remove());
 
     useDashboardStore.getState().setBleConnected(true);
-    return true;
+    saveLastDevice(connected);
+    return { ok: true };
   } catch (error) {
     console.warn("BLE connect error:", error);
+    // Dọn connection dang dở để không "mắc kẹt" ở trạng thái connecting
+    try {
+      await device.cancelConnection();
+    } catch {
+      // ignore
+    }
     store.setConnectionStatus("disconnected");
-    return false;
+    return { ok: false, error: mapBleError(error) };
   }
 }
 
@@ -392,17 +542,63 @@ export function disconnect() {
 export async function sendCommand(command: string, payload?: number[]): Promise<boolean> {
   if (!connectedDevice) return false;
 
+  // ble-plx yêu cầu giá trị Base64 hợp lệ — ký tự trần như "C"/"P"
+  // sẽ bị Android từ chối ("invalid data format")
   const cmdBytes = [command.charCodeAt(0), ...(payload ?? [])];
-  const cmdStr = String.fromCharCode(...cmdBytes);
+  const binary = String.fromCharCode(...cmdBytes);
+  const cmdBase64 = btoa(binary);
 
   try {
     await connectedDevice.writeCharacteristicWithResponseForService(
       SERVICE_UUID,
       CHAR_COMMAND,
-      cmdStr
+      cmdBase64
     );
     return true;
+  } catch (error) {
+    console.warn("sendCommand failed:", command, error);
+    return false;
+  }
+}
+
+// ── Auto-reconnect ───────────────────────────────────────────
+// Tự kết nối lại thiết bị đã ghép lần trước (khi mở lại app).
+// Trả về false nếu không có thiết bị đã lưu / không thể kết nối.
+export async function tryReconnectLastDevice(): Promise<boolean> {
+  const m = getManager();
+  if (!m) return false;
+
+  const { connectionStatus } = useDeviceStore.getState();
+  if (
+    connectionStatus === "connected" ||
+    connectionStatus === "connecting" ||
+    connectionStatus === "scanning"
+  ) {
+    return false;
+  }
+  // Đã có kết nối BLE thật đang chạy (ví dụ toggle mock bật/tắt
+  // không được reset state) — không kết nối lại làm gì
+  if (useDashboardStore.getState().bleConnected) return true;
+
+  let saved: { id?: string; name?: string } | null = null;
+  try {
+    const raw = await AsyncStorage.getItem(LAST_DEVICE_KEY);
+    if (!raw) return false;
+    saved = JSON.parse(raw);
   } catch {
     return false;
   }
+  if (!saved?.id) return false;
+
+  let devices: Device[] = [];
+  try {
+    devices = await withTimeout(m.devices([saved.id]), 5000);
+  } catch {
+    return false;
+  }
+  const device = devices[0];
+  if (!device) return false;
+
+  const result = await connectToDevice(device);
+  return result.ok;
 }

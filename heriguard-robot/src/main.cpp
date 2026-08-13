@@ -46,6 +46,21 @@ unsigned long lastSensorRead = 0;
 unsigned long lastNotify     = 0;
 const unsigned long SENSOR_INTERVAL = 2000;
 
+
+// ── LED (WS2812B x2, platform MiniR4) ───────────────────
+// Lưu ý API: MiniR4.LED.setColor(idx, r, g, b) — idx phải là 1 hoặc 2.
+// Gọi setColor(0, r, g, b) (như code cũ) trả về false, LED không sáng.
+void setLedColor(uint8_t r, uint8_t g, uint8_t b) {
+  MiniR4.LED.setColor(1, r, g, b);
+  MiniR4.LED.setColor(2, r, g, b);
+}
+
+// ── LED trạng thái ─────────────────────────────────────
+const unsigned long LED_BLINK_INTERVAL = 1000;  // 1s mỗi trạng thái LED khi chưa kết nối
+unsigned long lastBlinkTime = 0;
+bool ledOn = false;
+uint8_t ledPhase = 0;  // 0=đỏ, 1=xanh lá, 2=xanh dương (self-test lặp lại)
+
 // ── PID Line Following ─────────────────────────────────
 float kp = 1.5, ki = 0.05, kd = 0.3;
 float lastError = 0, integral = 0;
@@ -109,14 +124,29 @@ void setup() {
   MiniR4.begin();
   MiniR4.OLED.begin();
 
-  initSensors();
+initSensors();
+
+  // Self-test LED: đỏ → xanh → xanh dương lúc khởi động (mỗi màu 500ms).
+  // Nếu bật nguồn mà KHÔNG thấy LED xoay 3 màu → firmware chưa được nạp
+  // hoặc LED hỏng — không liên quan code BLE.
+  Serial.println("SELFTEST LED RED");
+  setLedColor(200, 0, 0);
+  delay(800);
+  Serial.println("SELFTEST LED GREEN");
+  setLedColor(0, 200, 0);
+  delay(800);
+  Serial.println("SELFTEST LED BLUE");
+  setLedColor(0, 0, 200);
+  delay(800);
+  Serial.println("SELFTEST DONE");
+  setLedColor(0, 0, 0);
 
   // UART cho M-Vision Cam (custom firmware, 921600 baud)
   Serial1.begin(921600);
 
   if (!BLE.begin()) {
     Serial.println("BLE init failed");
-    MiniR4.LED.setColor(255, 0, 0, 100);
+    setLedColor(255, 0, 0);
     while (1);
   }
 
@@ -138,7 +168,7 @@ void setup() {
 
   BLE.advertise();
 
-  MiniR4.LED.setColor(0, 0, 200, 100);
+  setLedColor(0, 0, 200);
   Serial.println("HERI-GUARD BLE ready");
 }
 
@@ -158,6 +188,33 @@ void initSensors() {
 // ── Loop ───────────────────────────────────────────────
 void loop() {
   BLE.poll();
+
+  // LED khi CHƯA kết nối BLE: SELF-TEST lặp lại — xoay màu 1s mỗi pha:
+  // ĐỎ → TẮT → XANH LÁ → TẮT → XANH DƯƠNG → TẮT → lặp lại.
+  // Nếu LED KHÔNG xoay 3 màu này → LED hỏng / không nhận tín hiệu,
+  // không liên quan code BLE.
+  if (!bleConnected) {
+    unsigned long now = millis();
+    if (now - lastBlinkTime >= LED_BLINK_INTERVAL) {
+      lastBlinkTime = now;
+      ledOn = !ledOn;
+      if (ledOn) {
+        if (ledPhase == 0) {
+          setLedColor(200, 0, 0);
+          Serial.println("LED PHASE RED");
+        } else if (ledPhase == 1) {
+          setLedColor(0, 200, 0);
+          Serial.println("LED PHASE GREEN");
+        } else {
+          setLedColor(0, 0, 200);
+          Serial.println("LED PHASE BLUE");
+        }
+        ledPhase = (ledPhase + 1) % 3;
+      } else {
+        setLedColor(0, 0, 0);
+      }
+    }
+  }
 
   // Priority 1: Stop command already handled via BLE event
   // Priority 2: Obstacle check
@@ -338,7 +395,7 @@ bool checkObstacle() {
 // ── BLE Events ─────────────────────────────────────────
 void onBLEConnected(BLEDevice central) {
   bleConnected = true;
-  MiniR4.LED.setColor(0, 200, 0, 100);
+  setLedColor(0, 200, 0);
   Serial.println("BLE connected");
   MiniR4.Buzzer.Tone(880, 100);
   delay(100);
@@ -347,7 +404,7 @@ void onBLEConnected(BLEDevice central) {
 
 void onBLEDisconnected(BLEDevice central) {
   bleConnected = false;
-  MiniR4.LED.setColor(0, 0, 200, 100);
+  setLedColor(0, 0, 200);
   Serial.println("BLE disconnected");
   if (patrolActive) {
     MiniR4.M3.setSpeed(0);
@@ -364,7 +421,11 @@ void onCommandWritten(BLEDevice central, BLECharacteristic characteristic) {
 
 // ── Sensor ─────────────────────────────────────────────
 void readSensor() {
-  MiniR4.D1.MXDHT.readTemperatureHumidity(temperature, humidity);
+  int dhtErr = MiniR4.D1.MXDHT.readTemperatureHumidity(temperature, humidity);
+  if (dhtErr != 0) {
+    Serial.print("DHT: ");
+    Serial.println(MiniR4.D1.MXDHT.getErrorString(dhtErr));
+  }
   battery = (uint8_t)MiniR4.PWR.getBattPercentage();
   Serial.print("T="); Serial.print(temperature, 1);
   Serial.print(" H="); Serial.print(humidity, 1);
@@ -396,6 +457,12 @@ void sendStatus() {
 // ── Camera JPEG Capture ─────────────────────────────────
 bool captureJpegFromCam() {
   if (!bleConnected) return false;
+
+  // Dọn byte rác còn sót trong buffer (ví dụ banner "CAM READY" lúc khởi động
+  // camera, hoặc frame cũ) — nếu không, header 0xAA sẽ bị nhiễu → capture fail
+  while (Serial1.available()) {
+    Serial1.read();
+  }
 
   // Gửi trigger 'C' → camera chụp JPEG, gửi về UART
   Serial1.write(CAM_TRIGGER);
@@ -488,7 +555,10 @@ void sendJpegViaBle() {
     memcpy(chunk + 6, jpegBuffer + offset, chunkSize);
 
     charCamera.writeValue(chunk, 6 + chunkSize);
-    delay(5);
+    // delay(5) quá nhanh: ArduinoBLE notify gửi từng packet qua GATT queue,
+    // Android thả packet khi stack bận → thiếu chunk → app không bao giờ
+    // ghép đủ frame. 25ms cho 206B/chunk ≈ 8KB/s, đủ cho JPEG ~3-6KB.
+    delay(25);
   }
 
   Serial.print("JPEG: sent ");
@@ -516,14 +586,14 @@ void handleCommand(uint8_t* buf, int len) {
   switch (cmd) {
     case 'C':
       Serial.println("Cmd: CAPTURE JPEG");
-      MiniR4.LED.setColor(200, 200, 0, 100);
+      setLedColor(200, 200, 0);
       if (captureJpegFromCam()) {
         sendJpegViaBle();
-        MiniR4.LED.setColor(0, 200, 0, 100);
+        setLedColor(0, 200, 0);
       } else {
-        MiniR4.LED.setColor(200, 0, 0, 100);
+        setLedColor(200, 0, 0);
         delay(200);
-        MiniR4.LED.setColor(0, 200, 0, 100);
+        setLedColor(0, 200, 0);
         Serial.println("Cmd: CAPTURE FAILED");
       }
       break;

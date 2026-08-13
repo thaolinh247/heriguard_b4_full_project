@@ -11,14 +11,18 @@ export function ControlPanel() {
   const mockMode = useSettingsStore((s) => s.mockMode);
 
   const isConnected = connectionStatus === "connected";
-  const canStart = isConnected && !patrolActive;
+  const canControl = isConnected || mockMode;
+  const canStart = canControl && !patrolActive;
 
   const handleCommand = async (cmd: string) => {
-    if (!isConnected) return;
-    // Ưu tiên BLE thật khi đã kết nối thiết bị; mock chỉ dùng khi dev chưa có robot
+    if (!canControl) return;
+    // Ưu tiên BLE thật khi đã kết nối thiết bị; mock chỉ dùng khi chưa kết nối
     const ok = mockMode && !isConnected ? mockSendCommand(cmd) : await sendCommand(cmd);
     if (!ok) {
-      Alert.alert("Không gửi được lệnh", "Kiểm tra kết nối BLE với robot rồi thử lại.");
+      Alert.alert(
+        "Không gửi được lệnh",
+        "Kiểm tra kết nối BLE với robot (Cài đặt → Quét thiết bị) rồi thử lại."
+      );
     }
   };
 
@@ -37,9 +41,9 @@ export function ControlPanel() {
           </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.btn, styles.btnCapture, !isConnected && styles.btnDisabled]}
+          style={[styles.btn, styles.btnCapture, !canControl && styles.btnDisabled]}
           onPress={() => handleCommand("C")}
-          disabled={!isConnected}
+          disabled={!canControl}
           activeOpacity={0.7}
         >
           <Text style={[styles.btnText, styles.btnTextCapture]}>Chụp ảnh</Text>
@@ -47,9 +51,9 @@ export function ControlPanel() {
       </View>
 
       <TouchableOpacity
-        style={[styles.btn, styles.btnStop, !isConnected && styles.btnDisabled]}
+        style={[styles.btn, styles.btnStop, !canControl && styles.btnDisabled]}
         onPress={() => handleCommand("X")}
-        disabled={!isConnected}
+        disabled={!canControl}
         activeOpacity={0.7}
       >
         <Text style={styles.btnTextStop}>DỪNG KHẨN CẤP</Text>

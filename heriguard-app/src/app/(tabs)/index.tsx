@@ -8,7 +8,9 @@ import { StateIndicator } from "@/components/dashboard/StateIndicator";
 import { ControlPanel } from "@/components/dashboard/ControlPanel";
 import { VirtualMap } from "@/components/dashboard/VirtualMap";
 import { startMockBle, stopMockBle } from "@/lib/mockBle";
+import { tryReconnectLastDevice } from "@/lib/ble";
 import { useDashboardStore } from "@/store/dashboardStore";
+import { useDeviceStore } from "@/store/deviceStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { Colors, Font } from "@/constants/theme";
 
@@ -19,11 +21,26 @@ export default function HomeScreen() {
   const bleConnected = useDashboardStore((s) => s.bleConnected);
   const lastUpdate = useDashboardStore((s) => s.lastUpdate);
   const stationId = useSettingsStore((s) => s.stationId);
+  const connectionStatus = useDeviceStore((s) => s.connectionStatus);
+  const deviceName = useDeviceStore((s) => s.deviceName);
 
   useEffect(() => {
-    if (mockMode) startMockBle();
-    return () => stopMockBle();
+    if (mockMode) {
+      startMockBle();
+      return () => stopMockBle();
+    }
+    // Chưa bật mock → thử kết nối lại robot đã ghép lần trước
+    tryReconnectLastDevice().then((ok) => {
+      if (!ok) useDashboardStore.getState().setBleConnected(false);
+    });
   }, [mockMode]);
+
+  const connText =
+    connectionStatus === "connected"
+      ? `Đã kết nối BLE${deviceName ? ` — ${deviceName}` : ""}`
+      : connectionStatus === "connecting" || connectionStatus === "scanning"
+        ? "Đang kết nối…"
+        : "Chưa kết nối BLE — vào Cài đặt để quét";
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -51,7 +68,7 @@ export default function HomeScreen() {
       <View style={styles.connBar}>
         <View style={[styles.connDot, { backgroundColor: bleConnected ? Colors.jade : Colors.lacquer }]} />
         <Text style={styles.connText}>
-          {bleConnected ? "Đã kết nối BLE" : "Đang kết nối…"}
+          {connText}
         </Text>
       </View>
 
