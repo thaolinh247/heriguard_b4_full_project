@@ -1,11 +1,13 @@
 import { useState } from "react";
-import { View, Text, Image, ScrollView, useWindowDimensions, StyleSheet } from "react-native";
+import { View, Text, Image, ScrollView, useWindowDimensions, StyleSheet, Pressable } from "react-native";
+import { useRouter } from "expo-router";
 import { useDeviceStore } from "@/store/deviceStore";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { PlaqueCard } from "@/components/shared/PlaqueCard";
 import { Colors, Font } from "@/constants/theme";
 
 export default function CameraScreen() {
+  const router = useRouter();
   const [activeIndex, setActiveIndex] = useState(0);
   const { width: screenWidth } = useWindowDimensions();
   const imageHistory = useDeviceStore((s) => s.imageHistory);
@@ -21,6 +23,14 @@ export default function CameraScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Camera hiện trường</Text>
       <Text style={styles.subtitle}>Vuốt để xem lịch sử chụp</Text>
+
+      <Pressable testID="crack-entry-button" onPress={() => router.push("/crack-recognition")} style={styles.aiButton}>
+        <View>
+          <Text style={styles.aiEyebrow}>NHẬN DIỆN HÌNH ẢNH</Text>
+          <Text style={styles.aiTitle}>Quét nhận diện vết nứt</Text>
+        </View>
+        <Text style={styles.aiArrow}>›</Text>
+      </Pressable>
 
       <PlaqueCard label="Ảnh gần nhất" style={styles.carouselCard}>
         {images.length === 0 ? (
@@ -159,6 +169,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.inkSoft,
     marginBottom: 16,
+  },
+  aiButton: {
+    minHeight: 66,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    marginBottom: 14,
+    borderRadius: 8,
+    backgroundColor: Colors.jade,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  aiEyebrow: {
+    fontFamily: Font.bold,
+    fontSize: 8,
+    letterSpacing: 1,
+    color: Colors.goldLight,
+  },
+  aiTitle: {
+    fontFamily: Font.bold,
+    fontSize: 15,
+    color: Colors.paper,
+    marginTop: 3,
+  },
+  aiArrow: {
+    fontFamily: Font.regular,
+    fontSize: 30,
+    color: Colors.paper,
   },
   carouselCard: {
     padding: 10,
