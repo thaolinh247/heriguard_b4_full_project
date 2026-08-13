@@ -73,9 +73,11 @@ struct MapMarker {
 uint8_t markerDistanceCount = 0;
 unsigned long patrolStartTime = 0;
 
-// ── Camera JPEG Capture ────────────────────────────────
-#define JPEG_BUF_SIZE 60000
-#define JPEG_CHUNK_PAYLOAD 506  // 512 BLE MTU - 6 byte header
+// ── Camera JPEG Capture (M-Vision Cam, custom main.py) ──
+// Camera MicroPython gửi JPEG qua UART 921600, trigger 'C':
+// frame = 0xAA + length(2B BE) + data + checksum(XOR). QQVGA ~3-6KB.
+#define JPEG_BUF_SIZE 6000
+#define JPEG_CHUNK_PAYLOAD 200  // MTU max 242 - 3 ATT - 6 header
 #define CAM_TRIGGER 'C'
 
 uint8_t jpegBuffer[JPEG_BUF_SIZE];
@@ -109,7 +111,7 @@ void setup() {
 
   initSensors();
 
-  // UART cho M-Vision Cam JPEG (921600 baud)
+  // UART cho M-Vision Cam (custom firmware, 921600 baud)
   Serial1.begin(921600);
 
   if (!BLE.begin()) {
@@ -117,7 +119,6 @@ void setup() {
     MiniR4.LED.setColor(255, 0, 0, 100);
     while (1);
   }
-  BLE.setMTU(517);
 
   BLE.setLocalName("HERI-GUARD-R4");
   BLE.setAdvertisedService(heriguardService);
@@ -163,7 +164,7 @@ void loop() {
   checkObstacle();
 
   // Priority 3: IMU tilt check
-  float ay = MiniR4.Motion.getAccelY();
+  float ay = MiniR4.Motion.getAccel(MiniR4Motion::AxisType::Y);
   if (abs(ay) > 0.5 && robotState == PATROL_MOVE) {
     baseSpeed = 25;
   } else {
@@ -393,24 +394,10 @@ void sendStatus() {
 }
 
 // ── Camera JPEG Capture ─────────────────────────────────
-
-// TODO: SmartCam detection qua UART - sẽ làm sau
-// void captureAndSendDetection() {
-//   MiniR4.Vision.Begin();
-//   unsigned int visionData[16];
-//   int result = MiniR4.Vision.SmartCamReader(visionData, 500);
-//   if (result > 0) {
-//     uint8_t d[2] = { (uint8_t)(visionData[0] & 0xFF), (uint8_t)(visionData[1] & 0xFF) };
-//     charDetection.writeValue(d, 2);
-//     Serial.print("Detection: label="); Serial.print(visionData[0]);
-//     Serial.print(" confidence="); Serial.println(visionData[1]);
-//   }
-// }
-
 bool captureJpegFromCam() {
   if (!bleConnected) return false;
 
-  // Gửi trigger 'C' đến camera → camera chụp JPEG, gửi về UART
+  // Gửi trigger 'C' → camera chụp JPEG, gửi về UART
   Serial1.write(CAM_TRIGGER);
 
   unsigned long start = millis();

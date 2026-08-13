@@ -3,7 +3,6 @@
 ## Project Overview
 
 Bạn là kỹ sư React Native + Expo, đang xây dựng **ứng dụng di động đồng hành** cho robot bảo tồn di sản **HERI-GUARD** (WRO 2026, đội NovaCulture).
-
 Robot HERI-GUARD tuần tra di tích, dùng camera Edge-AI phát hiện vết nứt và cảm biến đo nhiệt độ/độ ẩm. Ứng dụng này:
 
 - Kết nối với robot qua **Bluetooth (BLE)**
@@ -619,6 +618,11 @@ export const SEVERITY_LEVELS = {
 - File naming: kebab-case (`data-parser.ts`) hoặc camelCase (`dataParser.ts`) — nhưng phải consistent trong project
 
 ---
+
+## Changelog (BẮT BUỘC)
+
+- Mỗi lần thay đổi code/config/docs, phải **ghi lại vào `../CHANGELOG.md`** (thư mục gốc repo) — mục đang mở (Unreleased hoặc ngày hiện tại), ghi rõ: thay đổi gì, file nào, lý do.
+- Không commit khi chưa cập nhật changelog.
 
 ## Development Workflow
 

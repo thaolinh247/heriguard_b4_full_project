@@ -3,7 +3,21 @@ import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, StyleSheet }
 import { useRouter } from "expo-router";
 import type { Device } from "react-native-ble-plx";
 import { Colors, Font } from "@/constants/theme";
-import { requestBlePermissions, startScan, stopScan, connectToDevice } from "@/lib/ble";
+import { requestBlePermissions, startScan, stopScan, connectToDevice, tryEnableBluetooth, openLocationSettings } from "@/lib/ble";
+
+function mapScanError(message: string): string {
+  const m = message.toLowerCase();
+  if (m.includes("location")) {
+    return "Cần bật dịch vụ định vị (Location) để quét BLE trên Android.";
+  }
+  if (m.includes("powered off")) {
+    return "Bluetooth đang tắt. Hãy bật Bluetooth rồi bấm Quét lại.";
+  }
+  if (m.includes("permission")) {
+    return "Chưa được cấp quyền Bluetooth. Hãy cấp quyền rồi bấm Quét lại.";
+  }
+  return message;
+}
 
 export default function ScanScreen() {
   const router = useRouter();
@@ -27,17 +41,28 @@ export default function ScanScreen() {
       setError("Cần cấp quyền Bluetooth để quét thiết bị.");
       return;
     }
+    const powered = await tryEnableBluetooth();
+    if (!powered) {
+      setError("Bluetooth đang tắt. Hãy bật Bluetooth rồi bấm Quét lại.");
+      return;
+    }
     setScanning(true);
-    startScan(onDeviceFound);
+    startScan(onDeviceFound, (message) => {
+      setScanning(false);
+      setError(mapScanError(message));
+    });
     setTimeout(() => setScanning(false), 15000);
   }, [onDeviceFound]);
 
   useEffect(() => {
-    handleScan();
+    const t = setTimeout(() => {
+      handleScan();
+    }, 0);
     return () => {
+      clearTimeout(t);
       stopScan();
     };
-  }, []);
+  }, [handleScan]);
 
   const handleConnect = async (device: Device) => {
     setConnectingId(device.id);
@@ -73,6 +98,8 @@ export default function ScanScreen() {
     );
   };
 
+  const isLocationError = error?.toLowerCase().includes("location") ?? false;
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -85,6 +112,11 @@ export default function ScanScreen() {
       {error && (
         <View style={styles.errorBar}>
           <Text style={styles.errorText}>{error}</Text>
+          {isLocationError && (
+            <TouchableOpacity style={styles.locationBtn} onPress={openLocationSettings}>
+              <Text style={styles.locationBtnText}>Mở Cài đặt Vị trí</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -155,6 +187,19 @@ const styles = StyleSheet.create({
     fontFamily: Font.regular,
     fontSize: 12,
     color: Colors.paper,
+  },
+  locationBtn: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    backgroundColor: Colors.paper,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 2,
+  },
+  locationBtnText: {
+    fontFamily: Font.bold,
+    fontSize: 12,
+    color: Colors.lacquer,
   },
   loadingWrap: {
     flex: 1,

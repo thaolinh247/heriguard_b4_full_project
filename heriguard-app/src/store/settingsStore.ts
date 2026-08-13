@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { DEFAULT_GEMINI_API_KEY } from "@/config/apiKey";
 
 interface SettingsState {
   mockMode: boolean;
@@ -17,8 +18,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   mockMode: true,
   bleDeviceName: "HERI-GUARD-01",
   stationId: "#01",
-  geminiApiKey: "",
-  geminiMockMode: true,
+  geminiApiKey: DEFAULT_GEMINI_API_KEY,
+  geminiMockMode: false,
   setMockMode: (enabled) => set({ mockMode: enabled }),
   setBleDeviceName: (name) => set({ bleDeviceName: name }),
   setStationId: (id) => set({ stationId: id }),

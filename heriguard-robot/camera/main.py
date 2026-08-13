@@ -8,7 +8,7 @@ uart = UART(3, 921600, timeout=1000)
 # Camera: OV7725 / MT9M114
 sensor.reset()
 sensor.set_pixformat(sensor.RGB565)
-sensor.set_framesize(sensor.QVGA)  # 320x240 (JPEG ~15-25KB)
+sensor.set_framesize(sensor.QQVGA)  # 160x120 (JPEG ~3-6KB, vừa RAM Mini R4 7KB)
 sensor.skip_frames(time=2000)
 
 uart.write(b"HERI-GUARD CAM READY\r\n")
@@ -21,8 +21,8 @@ while True:
             # Chụp ảnh
             img = sensor.snapshot()
 
-            # Nén JPEG quality 80
-            img.compress(quality=80)
+            # Nén JPEG quality 60 (giữ < 14KB vì RAM Mini R4)
+            img.compress(quality=60)
             jpeg = img.bytearray()
             length = len(jpeg)
 

@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { sendCommand } from "@/lib/ble";
 import { mockSendCommand } from "@/lib/mockBle";
 import { useDeviceStore } from "@/store/deviceStore";
@@ -13,12 +13,12 @@ export function ControlPanel() {
   const isConnected = connectionStatus === "connected";
   const canStart = isConnected && !patrolActive;
 
-  const handleCommand = (cmd: string) => {
+  const handleCommand = async (cmd: string) => {
     if (!isConnected) return;
-    if (mockMode) {
-      mockSendCommand(cmd);
-    } else {
-      sendCommand(cmd);
+    // Ưu tiên BLE thật khi đã kết nối thiết bị; mock chỉ dùng khi dev chưa có robot
+    const ok = mockMode && !isConnected ? mockSendCommand(cmd) : await sendCommand(cmd);
+    if (!ok) {
+      Alert.alert("Không gửi được lệnh", "Kiểm tra kết nối BLE với robot rồi thử lại.");
     }
   };
 

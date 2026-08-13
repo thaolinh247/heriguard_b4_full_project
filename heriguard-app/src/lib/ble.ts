@@ -1,6 +1,6 @@
-import { BleManager, type Device } from "react-native-ble-plx";
-import { Platform, PermissionsAndroid } from "react-native";
-import { File, Directory, Paths } from "expo-file-system";
+import { BleManager, State, type Device } from "react-native-ble-plx";
+import { Platform, PermissionsAndroid, Linking } from "react-native";
+import { Directory, Paths } from "expo-file-system";
 import { useDeviceStore } from "@/store/deviceStore";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { usePatrolStore } from "@/store/patrolStore";
@@ -54,10 +54,67 @@ export async function requestBlePermissions(): Promise<boolean> {
   return true;
 }
 
+// ── Adapter state ────────────────────────────────────────────
+export async function getBleState(): Promise<State | null> {
+  const m = getManager();
+  if (!m) return null;
+  try {
+    return await m.state();
+  } catch {
+    return null;
+  }
+}
+
+async function waitForPowerOn(timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await getBleState();
+    if (state === "PoweredOn") return true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
+export async function tryEnableBluetooth(): Promise<boolean> {
+  const m = getManager();
+  if (!m) return false;
+  try {
+    const state = await m.state();
+    if (state === "PoweredOn") return true;
+    if (state === "PoweredOff") {
+      await m.enable();
+      return await waitForPowerOn();
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 // ── Scan ─────────────────────────────────────────────────────
 let isScanning = false;
 
-export function startScan(onDeviceFound: (device: Device) => void) {
+const SERVICE_UUID_SHORT = SERVICE_UUID.replace(/-/g, "").toUpperCase();
+
+// ArduinoBLE bỏ local name khỏi advertisement nếu không đủ 31 byte
+// (flags + 128-bit service UUID + name > 31B), nên device.name có thể
+// là null trên Android. Luôn match theo service UUID như fallback.
+function isHeriGuardDevice(device: Device): boolean {
+  const name = device.name ?? device.localName ?? "";
+  if (name.includes("HERI-GUARD")) return true;
+
+  const uuids = [...(device.serviceUUIDs ?? []), ...(device.overflowServiceUUIDs ?? [])];
+  return uuids.some(
+    (uuid) =>
+      uuid &&
+      uuid.replace(/-/g, "").toUpperCase().startsWith(SERVICE_UUID_SHORT.slice(0, 8))
+  );
+}
+
+export function startScan(
+  onDeviceFound: (device: Device) => void,
+  onError?: (message: string) => void
+) {
   if (isScanning) return;
   const m = getManager();
   if (!m) return;
@@ -68,10 +125,12 @@ export function startScan(onDeviceFound: (device: Device) => void) {
   m.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
     if (error) {
       console.warn("BLE scan error:", error.message);
+      m.stopDeviceScan();
       isScanning = false;
+      onError?.(error.message);
       return;
     }
-    if (device && device.name?.includes("HERI-GUARD")) {
+    if (device && isHeriGuardDevice(device)) {
       onDeviceFound(device);
     }
   }).catch(() => {});
@@ -80,6 +139,15 @@ export function startScan(onDeviceFound: (device: Device) => void) {
     m.stopDeviceScan();
     isScanning = false;
   }, 15000);
+}
+
+export async function openLocationSettings(): Promise<void> {
+  if (Platform.OS !== "android") return;
+  try {
+    await Linking.sendIntent("android.settings.LOCATION_SOURCE_SETTINGS");
+  } catch {
+    Linking.openSettings();
+  }
 }
 
 export function stopScan() {
@@ -184,7 +252,7 @@ function handleStatusData(data: number[]) {
 function handleDetectionData(data: number[]) {
   if (data.length < 2) return;
   const label = data[0];
-  const confidence = data[1];
+  const confidence = data[1] / 100;
   const labelNames: Record<number, string> = {
     0: "crack_small", 1: "crack_large", 2: "moss",
     3: "mold", 4: "stain",
@@ -260,6 +328,14 @@ export async function connectToDevice(device: Device): Promise<boolean> {
   try {
     const connected = await device.connect();
     await connected.discoverAllServicesAndCharacteristics();
+
+    if (Platform.OS === "android") {
+      try {
+        await connected.requestMTU(512);
+      } catch {
+        // MTU negotiation failure is not fatal; sensor/status data still works
+      }
+    }
 
     connectedDevice = connected;
     store.setDeviceName(connected.name ?? "HERI-GUARD");

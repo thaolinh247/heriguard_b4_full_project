@@ -35,12 +35,6 @@ export const useAlertStore = create<AlertState>((set, get) => ({
     })),
   clearAll: () => set({ alerts: [], unreadCount: 0 }),
   triggerFromDetection: (detection) => {
-    const severity =
-      detection.confidence > 0.75
-        ? "high"
-        : detection.confidence > 0.55
-          ? "medium"
-          : "low";
     const { alerts } = get();
     const duplicate = alerts.some(
       (a) => a.type === `detect_${detection.label}` && a.timestamp === detection.timestamp

@@ -154,6 +154,8 @@ MiniR4.WiFi.begin(ssid, pass);     // WiFiS3
 ```
 
 ## Code Conventions
+
+- Mỗi lần thay đổi code/config/docs, phải **ghi lại vào `../CHANGELOG.md`** (thư mục gốc repo) — ghi rõ: thay đổi gì, file nào, lý do. Không commit khi chưa cập nhật changelog.
 - Firmware: Arduino C++, use `MiniR4` global object
 - Web: Next.js 14+ (App Router), TypeScript, Tailwind CSS
 - MQTT Topics: `heriguard/sensor`, `heriguard/alert`, `heriguard/camera`, `heriguard/status`

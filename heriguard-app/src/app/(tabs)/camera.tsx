@@ -136,9 +136,6 @@ export default function CameraScreen() {
   );
 }
 
-const OSD_H = 16;
-const OSD_W = 90;
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
