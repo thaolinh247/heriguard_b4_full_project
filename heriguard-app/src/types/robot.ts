@@ -84,6 +84,57 @@ export const ROBOT_STATE_LABELS: Record<RobotState, string> = {
 
 export type PatrolCommand = "P" | "X" | "C" | "S";
 
+// ── Shot kind (camera angle/distance) ──────────────────────────
+export type ShotKind = 0 | 1 | 2 | 3;
+export const SHOT_KIND_LABELS: Record<ShotKind, string> = {
+  0: "Wide (A)",
+  1: "Close Low (C)",
+  2: "Close High (D)",
+  3: "Manual",
+};
+
+// ── Phase 2A: Node Image (linked to patrol + node) ─────────────
+export interface DetectionInImage {
+  label: string;
+  confidence: number;
+  bbox?: BoundingBox;
+}
+
+export interface ImageAnalysis {
+  severity: CrackSeverity;
+  crackArea?: number; // Percentage of image
+  crackCount?: number;
+  findings: string;
+}
+
+export interface NodeImage {
+  uri: string;
+  frameId: number;
+  nodeX2: number; // 0 = node 0 (0m), 1 = node 0.5m, 2 = node 1m, etc
+  shotKind: ShotKind;
+  pan?: number; // 0-180, 90 = center
+  tilt?: number; // 0-180, 90 = straight
+  timestamp: string; // ISO string
+  temperature: number;
+  humidity: number;
+  laserDistance?: number; // mm
+  detection?: DetectionInImage | null;
+  analysis?: ImageAnalysis | null;
+}
+
+// ── Phase 2B: Detection Event ──────────────────────────────────
+export interface DetectionEvent {
+  id: string;
+  timestamp: string;
+  nodeX2: number;
+  shotKind: ShotKind;
+  label: string;
+  confidence: number;
+  bbox: BoundingBox;
+  temperature: number;
+  humidity: number;
+}
+
 // ── Phase 2: Map Marker ───────────────────────────────────────
 export interface MapMarker {
   distanceX2: number;
@@ -101,11 +152,16 @@ export interface MapMarker {
   timestamp: number;
 }
 
+// ── Phase 3: Patrol Session (persistent, with manifest) ────────
 export interface PatrolSession {
   id: string;
   startTime: string;
   endTime?: string;
+  // Core data
+  images: NodeImage[];
   mapMarkers: MapMarker[];
-  imageUris: string[];
+  detections: DetectionEvent[];
   sensorLogs: SensorReading[];
+  // Legacy (kept for compatibility)
+  imageUris?: string[];
 }

@@ -3,10 +3,10 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { Asset } from "expo-asset";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
+import { CameraView, useCameraPermissions } from "expo-camera";
+import * as ImagePicker from "expo-image-picker";
 import { Colors, Font } from "@/constants/theme";
 import { images } from "@/constants/images";
-import { chooseImageFile } from "@/lib/browser-camera";
-import { BrowserCameraPreview, type BrowserCameraHandle } from "@/components/BrowserCameraPreview";
 import { analyzeCrackOnDevice, CRACK_TEST_ACCURACY, type CrackResult } from "@/ml/crack";
 
 export default function CrackRecognitionScreen() {
@@ -16,10 +16,10 @@ export default function CrackRecognitionScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cameraLive, setCameraLive] = useState(true);
-  const cameraRef = useRef<BrowserCameraHandle>(null);
+  const cameraRef = useRef<CameraView>(null);
+  const [permission, requestPermission] = useCameraPermissions();
 
   async function run(nextUri: string) {
-    cameraRef.current?.stop();
     setCameraLive(false);
     setUri(nextUri); setResult(null); setError(null); setBusy(true);
     try {
@@ -34,16 +34,23 @@ export default function CrackRecognitionScreen() {
   async function captureCamera() {
     setError(null);
     try {
-      const nextUri = cameraRef.current?.capture();
-      if (!nextUri) throw new Error("Camera chưa sẵn sàng.");
-      await run(nextUri);
+      const photo = await cameraRef.current?.takePictureAsync();
+      if (!photo) throw new Error("Camera chưa sẵn sàng.");
+      await run(photo.uri);
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Không mở được camera."); }
   }
 
-  async function fromFile() {
+  async function fromGallery() {
     setError(null);
-    try { await run(await chooseImageFile()); }
+    try {
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.9,
+      });
+      if (picked.canceled || !picked.assets[0]) return;
+      await run(picked.assets[0].uri);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Không đọc được ảnh."); }
   }
 
@@ -51,6 +58,24 @@ export default function CrackRecognitionScreen() {
     const asset = Asset.fromModule(images.crackSamplePositive);
     if (!asset.localUri && !asset.uri) await asset.downloadAsync();
     await run(asset.localUri ?? asset.uri);
+  }
+
+  async function ensureCameraReady() {
+    if (permission?.granted) return true;
+    if (permission?.canAskAgain) {
+      const next = await requestPermission();
+      return next.granted;
+    }
+    setError("Chưa được cấp quyền camera — hãy bật quyền rồi thử lại.");
+    return false;
+  }
+
+  async function onCapturePress() {
+    if (cameraLive) {
+      if (await ensureCameraReady()) await captureCamera();
+    } else {
+      setUri(null); setResult(null); setError(null); setCameraLive(true);
+    }
   }
 
   return (
@@ -67,7 +92,7 @@ export default function CrackRecognitionScreen() {
 
       <View style={styles.viewer}>
         {cameraLive ? (
-          <BrowserCameraPreview ref={cameraRef} onReady={() => setError(null)} onError={(message) => setError(message)} />
+          <CameraView ref={cameraRef} style={styles.camera} facing="back" />
         ) : uri ? (
           <>
             <Image source={{ uri }} style={styles.photo} contentFit="cover" />
@@ -111,12 +136,10 @@ export default function CrackRecognitionScreen() {
       {error && <View style={styles.errorCard}><Text style={styles.errorTitle}>Chưa thể dùng camera</Text><Text style={styles.errorText}>{error}</Text><Text style={styles.errorText}>Bạn vẫn có thể chọn ảnh hoặc chạy ảnh mẫu bên dưới.</Text></View>}
 
       <View style={styles.actions}>
-        <Pressable testID="crack-capture-button" onPress={cameraLive ? captureCamera : () => {
-          setUri(null); setResult(null); setError(null); setCameraLive(true);
-        }} style={[styles.button, styles.primaryButton]}>
+        <Pressable testID="crack-capture-button" onPress={onCapturePress} style={[styles.button, styles.primaryButton]}>
           <Text style={styles.primaryText}>{cameraLive ? "Chụp & nhận diện" : "Mở lại camera"}</Text>
         </Pressable>
-        <Pressable onPress={fromFile} style={[styles.button, styles.secondaryButton]}><Text style={styles.secondaryText}>Chọn ảnh</Text></Pressable>
+        <Pressable onPress={fromGallery} style={[styles.button, styles.secondaryButton]}><Text style={styles.secondaryText}>Thư viện ảnh</Text></Pressable>
       </View>
       <Pressable testID="crack-sample-button" onPress={fromSample} style={styles.sampleButton}>
         <Text style={styles.sampleTitle}>Chạy ảnh mẫu có vết nứt</Text>
@@ -142,6 +165,7 @@ const styles = StyleSheet.create({
   eyebrow: { fontFamily: Font.bold, fontSize: 9, letterSpacing: 1.2, color: Colors.jade },
   title: { fontFamily: Font.bold, fontSize: 23, color: Colors.ink },
   viewer: { width: "100%", aspectRatio: 1, overflow: "hidden", backgroundColor: Colors.jadeLight, borderRadius: 12, position: "relative", borderWidth: 1, borderColor: Colors.line },
+  camera: { width: "100%", height: "100%" },
   photo: { width: "100%", height: "100%" },
   placeholder: { flex: 1, padding: 42, alignItems: "center", justifyContent: "center" },
   placeholderIcon: { fontSize: 46, color: Colors.jade },

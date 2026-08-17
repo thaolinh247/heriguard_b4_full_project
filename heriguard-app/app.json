@@ -18,7 +18,9 @@
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN"
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES"
       ],
       "package": "com.anonymous.heriguardapp"
     },
@@ -36,7 +38,19 @@
           "imageWidth": 76
         }
       ],
-      "react-native-ble-plx"
+      "react-native-ble-plx",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Cho phép HERI-GUARD dùng camera để chụp bề mặt di tích."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Cho phép HERI-GUARD mở ảnh từ thư viện để nhận diện vết nứt."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

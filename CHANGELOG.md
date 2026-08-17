@@ -6,6 +6,137 @@ Lịch sử thay đổi toàn bộ dự án (heriguard-app + heriguard-robot).
 
 ## Unreleased
 
+### 2026-08-16 — Hoàn thiện port B3: junction rẽ 90° + xử lý mất line
+
+**heriguard-robot `src/main.cpp`** (tiếp theo port B3)
+- `updateJunctionCounters()` giờ trả về type junction vừa latch (1=trái, 2=phải).
+- **Mới `handleJunction()`**: khi PATROL_MOVE gặp junction xác nhận (2 frame liên tiếp) → dừng, `turnToAngle()` rẽ vuông góc 90° theo IMU (B3 turnByAngle) → reset encoder + PID + runtime → tiếp tục đo 0.5m. Gọi từ `followRightEdgeStep()`.
+- **Xử lý mất line**: `isLineLostBySensorRule()` (active < 2 sensor, ngưỡng LINE_THRESHOLD=30); 3 frame liên tiếp → dừng + log; mất > 3s → `EMERGENCY` + BLE status. Reset state trong `resetFollowRuntime()`.
+- (Không port `pt_can_vuong_goc` — bàn 6m thẳng không có line cắt ngang; robot tự thẳng hàng với line.)
+
+**Kiểm tra**: `pio run` SUCCESS.
+
+### 2026-08-17 — AI chạy được trên máy thật + logic 'N' (robot chỉ chụp, app nhận diện) + mục "Lưu trữ theo node"
+
+**Lý do**: user báo (1) AI không chạy trên máy thật (camera báo lỗi, ảnh mẫu không nhận diện — model chỉ chạy web), (2) muốn đổi logic "Chụp & Nhận diện": robot chỉ chụp, app nhận diện, nếu đạt ngưỡng thì lưu ảnh + nhiệt độ/độ ẩm tại node rồi phân tích như tuần tra, (3) cần thấy rõ phần lưu trữ theo node + so sánh giữa các lần tuần tra.
+
+**heriguard-app**
+- `src/ml/crack.ts`: port `loadGrayImage()` sang native — dùng `expo-image-manipulator` (resize 320×320 = lưới 5×5 ô 64×64) + `jpeg-js` (decode JPEG → grayscale) + `buffer`; giữ đường web (canvas). Hết lỗi "Bản thử nghiệm model cần chạy trên web" → camera/ảnh mẫu/gallery nhận diện được ngay trên máy thật.
+- `src/lib/staticCapture.ts` (mới): luồng lệnh 'N' mới — nhận ảnh robot gửi → chạy `analyzeCrackOnDevice` → không đạt ngưỡng: chỉ hiện trên carousel (không lưu); đạt ngưỡng: lưu ảnh vào `patrols/{id}/node_{x}/` + nhiệt độ/độ ẩm tại điểm + phân tích như tuần tra bình thường + đồng bộ patrolStore/detectionStore/alertStore.
+- `src/store/patrolStore.ts`: thêm `addCompletedPatrol()` — tạo phiên 1 ảnh từ lệnh 'N', đưa vào lịch sử.
+- `src/lib/mockBle.ts`: lệnh 'N' giờ chụp ảnh asset thật của node và chạy **đúng model** (thay detection giả 0.72 cố định); kết quả nhận diện hiện trên carousel.
+- `src/lib/ble.ts`: ảnh nhận khi **không có tuần tra** (lệnh 'N' thật) → `saveStaticCaptureFromUri()` thay vì chỉ bỏ vào imageHistory.
+- `src/app/(tabs)/history.tsx`: thêm mục **"Lưu trữ theo node"** ở đầu tab — mỗi node 1 thẻ: ảnh từng lần tuần tra ngang hàng (thumbnail kèm ngày + mức severity), Δ diện tích vết nứt so lần trước, chạm vào mở `node-detail` so sánh chi tiết.
+- `src/store/dashboardStore.ts`: `updateSensor()` chặn giá trị 0/NaN (DHT lỗi gửi 0 → không đè dữ liệu cũ).
+- Cài thư viện (đã xin phép user): `expo-image-manipulator`, `jpeg-js`, `buffer`.
+
+**heriguard-robot `src/main.cpp`**
+- Lệnh `'N'` đổi thành **capture-only**: robot chỉ chụp JPEG + gửi nhiệt độ/độ ẩm + gửi ảnh qua BLE, KHÔNG còn detect trên robot (bỏ `readDetectionFromCam`, detection 12 byte, map marker) — model nhận diện chạy trên app.
+- `readSensor()`: nếu DHT đọc lỗi hoặc giá trị ngoài phạm vi → **giữ giá trị hợp lệ gần nhất** (`lastGoodTemp`/`lastGoodHum`) thay vì trả 0 → app không "mất dữ liệu" nhiệt/ẩm.
+
+**Kiểm tra**: `tsc --noEmit` 0 lỗi; `expo lint` 0 lỗi; `pio run` SUCCESS (RAM 69.4%, Flash 47.5%).
+
+### 2026-08-16 — Port tầng di chuyển + khởi động robot từ WRO 2026 B3
+
+**heriguard-robot**
+- **Mới `include/utils.h` + `src/utils.cpp`**: copy nguyên bộ `RobotUtils` từ B3 (không phụ thuộc hardware) — clamp, limitStep, deadband, exponentialFilter, servo step control (non-blocking, detect kẹt), `turnByAngle()` (xoay theo IMU với decel zone + timeout).
+- **`src/main.cpp` — di chuyển thay bằng B3**:
+  - Motor: `setTankRaw()`/`setTankSmoothed()` (mượt, giới hạn ±30/lần), `stopRobot()`, polarity `INVERT_LEFT=false` (M3), `INVERT_RIGHT=true` (M4).
+  - PID chuẩn B3: KP=18, KI=0.002, KD=2, integral limit 8, filter alpha 0.45, deadband 0.05, base 46/min 24, max correction 72 — thay PID cũ (kp=1.5, integral không giới hạn).
+  - Line sensor chuyển sang **I2C0** (`MXLineTracer.getAllSensors`) đúng robot thật (trước dùng I2C2), threshold 30; `computeZoneFollowError` bám cạnh phải (kênh 1-6, target 3.5).
+  - Junction detection two-gate (width≥8 + kênh 9&10 cho cạnh phải) + `updateJunctionCounters` latch/debounce + còi — trong `patrolMove()` mỗi loop 1 bước `followRightEdgeStep()`.
+  - `driveForwardCm()` (encoder M3, bánh 6.5cm), `followLineUntilLaserBelow()` (bám line tới khi laser < 200mm — dùng trong INSPECT_B thay while-loop cũ), `turnToAngle()` qua IMU Roll (board gắn đứng).
+  - Khoảng cách 0.5m vẫn dùng trung bình encoder M3+M4; thêm fail-safe 15s/đoạn.
+- **Khởi động**: `initRobot()` theo B3 — `MiniR4.begin()`, `PWR.setBattCell(2)`, LineTracer I2C0 + setThreshold(30), Laser I2C1, `Motion.begin()`, `initServosToHome()` (camera home: pan 90/fold 0/tilt 90/twist 90) + delay 400ms, `resetPid()`.
+- `checkObstacle()` chỉ trigger khi `PATROL_MOVE` (trước trigger cả lúc INSPECT_B tiến tới tường ở 200mm → kẹt EMERGENCY); `handleJunction()` cũ bỏ (thay bằng junction counters).
+- Giữ nguyên: BLE 1 service 6 chars, protocol 10-byte JPEG header / 12-byte detection, camera `'C'`/`'D'`, lệnh `P/X/C/N/S`, map marker 9 byte.
+
+**Kiểm tra**: `pio run` SUCCESS (RAM 69.4%, Flash 47.5%).
+
+### 2026-08-16 — Kịch bản demo app (DEMO-SCRIPT.md)
+
+- Thêm `DEMO-SCRIPT.md` (gốc repo): kịch bản 3 chặng cho giám khảo WRO 2026 — (1) so sánh & lưu trữ theo node từ dữ liệu mẫu, (2) tuần tra trực tiếp qua mock/BLE, (3) edge AI 97.28% trên điện thoại không cần mạng — kèm checklist chuẩn bị, bản rút gọn 4 phút, và câu chốt trình bày.
+
+### 2026-08-16 — Tái cấu trúc giả lập app: seed dữ liệu mẫu tự động + ảnh lưu node thật + camera/thư viện native
+
+**Lý do**: user chưa thấy được compare & lưu trữ tại node (mock lưu ảnh 1×1 px, compare chỉ hiện sau 2+ tuần tra cùng node, History trống khi mở app), và camera hiện chỉ là web-view không chụp được trên máy thật.
+
+**heriguard-app**
+- `src/lib/fileStorage.ts`: thêm `savePatrolImageFromFile()` (copy JPEG asset thật vào `patrols/{id}/node_{x}/` thay vì base64 1×1) + `getNodeStorageDir()` (đường dẫn hiển thị UI).
+- `src/lib/sim/simMedia.ts` (mới): ánh xạ node → ảnh asset ổn định (node 0–2 = bề mặt sạch wall/column, node 3+ = ảnh nứt heritage-cracks/wall-crack); `resolveSimUri()` dùng `expo-asset` để có file URI thật cho `copyAsync`.
+- `src/lib/sim/seedDemoData.ts` (mới): tự sinh **3 lần tuần tra mẫu** (14/7/1 ngày trước), mỗi lần 7 node, diện tích nứt tăng dần theo thời gian (bbox rộng dần) → mở app là thấy ngay: History → chi tiết tuần tra → so sánh Δ → biểu đồ xu hướng → cảnh báo leo thang; đồng bộ `patrolStore.importPatrols()` + `detectionStore` + `alertStore` (4 cảnh báo trend node 3–6).
+- `src/store/patrolStore.ts`: thêm action `importPatrols()` (merge + sắp mới nhất trước) cho seed.
+- `src/app/_layout.tsx`: khởi động load lịch sử → nếu trống và chưa có demo trên đĩa thì `seedDemoData()` tự động.
+- `src/app/patrol/node-detail.tsx`: thẻ "Lưu trữ tại node" hiển thị đường dẫn thư mục node thật trên đĩa.
+- `src/lib/mockBle.ts`: mock patrol giờ lưu **JPEG thật** từ assets vào node folder (hết ảnh 1×1); detection/bbox vẫn tăng dần theo số lần tuần tra.
+- `src/app/crack-recognition.tsx`: thay web-view bằng **camera native** (`expo-camera` `CameraView` + `takePictureAsync`) và **thư viện ảnh** (`expo-image-picker`) — chụp máy thật hoặc chọn ảnh từ gallery; giữ nguyên MLP 97.28% phân tích on-device + ảnh mẫu.
+- Xóa file web-only: `src/lib/browser-camera.ts`, `src/components/BrowserCameraPreview.tsx` (đã thay bằng native).
+- `app.json`: cài plugin `expo-camera` + `expo-image-picker` (bản quyền camera/thư viện tiếng Việt) + `CAMERA`, `READ_MEDIA_IMAGES`.
+- Cài thư viện: `expo-camera`, `expo-image-picker` (SDK 57, đã xin phép user).
+
+**Kiểm tra**: `tsc --noEmit` 0 lỗi; `expo lint` 0 lỗi.
+
+### 2026-08-16 — Hủy Plan "phương án B" (port MLP 97.28% lên M-Vision) — blocker lưu trữ
+
+- **Lý do hủy**: khảo sát camera (GĐ 0) cho thấy flash trống chỉ **101 KB** (firmware chiếm gần hết 2 MB), không có khe SD → `crack_w.bin` (405 KB) không thể nạp. Thí nghiệm fp8/fp4 trên PC: fp8 giữ nguyên dung lượng (405 KB), fp4 còn 207 KB — đều vượt 101 KB; chỉ model ít trọng số hơn (≤ ~80 KB) mới vừa, nhưng pipeline huấn luyện không tồn tại trên git (branch `feature/edge-ai-recognition` chỉ chứa `crack-model.ts` nhúng + ảnh mẫu).
+- **Đã revert**: xóa branch `feature/mvision-mlp-model`; xóa `PLAN-EDGE-AI-MVISION-MODEL.md`, `camera/model.py`, `camera/crack_w.bin`, `camera/crack_meta.json`, toàn bộ `tools/` (export/ground-truth/parity/quant-test); hoàn nguyên `.gitignore` + 2 mục changelog của plan B. Giữ nguyên toàn bộ Phase A/B/C, lệnh 'N', VirtualMap, mock BLE.
+- **Hướng thay thế (đang đề xuất)**: chạy đúng model 97.28% (crack-model.ts) **trên app** với khung hình thật từ robot qua BLE/MQTT — điện thoại tắt mạng vẫn chạy (edge AI cục bộ), camera giữ heuristic (bbox + JPEG).
+
+### 2026-08-16 — Lệnh test tĩnh 'N' (test camera/edge-AI không cần robot di chuyển)
+
+**heriguard-robot `src/main.cpp`**
+- `handleCommand()`: thêm lệnh `'N'` = static inspect — chụp JPEG + gọi edge-AI `'D'` + gửi detection 12 byte + map marker ngay khi robot đứng yên trên bàn (không cần Start Patrol). Dùng để test nhanh camera/edge-AI khi chưa có bàn chạy line.
+- `sendDetectionViaBle()`: điền đúng temp/humidity vào 4 byte cuối (trước đây để 0 → app phải fallback sang dashboard).
+
+**heriguard-app**
+- `src/components/dashboard/ControlPanel.tsx`: nút "Chụp ảnh" → gửi `'N'`, đổi nhãn "Chụp + Nhận diện" — bấm 1 phát là thấy ảnh + detection, không cần chạy tuần tra.
+- `src/lib/mockBle.ts`: `mockSendCommand()` trả `boolean` (sửa bug có sẵn: mock mode bấm nút luôn hiện alert "Không gửi được lệnh" vì `void` → `!ok` luôn đúng); thêm case `'N'` — mock thêm ảnh + detection giả (crack_small 72%).
+
+**Kiểm tra**: firmware `pio run` SUCCESS; app `tsc --noEmit` 0 lỗi, `expo lint` 0 lỗi (1 warning có sẵn trong BrowserCameraPreview.tsx, không liên quan).
+
+### 2026-08-16 — Bản đồ mô phỏng: ảnh guard làm nền + chấm đỏ điểm dừng
+
+**heriguard-app**
+- `src/components/dashboard/VirtualMap.tsx`: thay bản đồ dải chấm ngang cũ bằng **bản đồ mô phỏng** — dùng ảnh `assets/images/guard.png` làm nền bản đồ (resizeMode cover), vẽ đường tuần tra ngang qua giữa, và **chấm đỏ (`Colors.lacquer`) tại từng điểm robot dừng** (marker theo `distanceX2`, tỷ lệ theo quãng đường tối đa). Chạm vào chấm xem tooltip chi tiết (vấn đề, nhiệt độ/độ ẩm). Thêm chú thích dưới bản đồ; dedupe marker trùng vị trí.
+- **Kiểm tra**: `tsc --noEmit` 0 lỗi, `expo lint` 0 lỗi mới.
+
+### 2026-08-16 — Phase B+C: Firmware Edge-AI thật + protocol 10/12-byte + UI chi tiết tuần tra
+
+**heriguard-robot `src/main.cpp`**
+- **Detection thật thay mock**: `inspectWide()` bỏ `random()` — gọi `captureJpegFromCam()` + `readDetectionFromCam()` (lệnh `'D'` lên camera), có issue → INSPECT_B, sạch → INSPECT_E. Gửi cờ MOSS/MOLD/STAIN/CRACK qua map marker tương ứng.
+- **Bật INSPECT_B/C/D** trong `runStateMachine()` (trước bị comment): chụp cận khi pan phải/trái — `inspectCloseApproach()`, `inspectScanLow()`, `inspectScanHigh()` (mỗi vị trí capture + detect + send). Thêm `inspectRetractFull()`.
+- **Servo điều khiển camera**: define `SERVO_PAN_L/C/R` (45/90/135), `SERVO_TILT_LOW/HIGH/HOME` (45/135/90), `SERVO_TWIST_*`, hàm `servoHome()` (gọi khi bắt đầu tuần tra) + `servoPan()`.
+- **Header JPEG 10 byte** (trước 6): `frameId(2)+nodeX2(1)+shotKind(1)+pan(1)+tilt(1)+chunkIdx(2)+totalChunks(2)` — app hết phải suy đoán node.
+- **Detection char 12 byte** (trước 10): `label(1)+confidence(1)+nodeX2(1)+shotKind(1)+bbox(4)+temp(2)+humidity(2)` qua `sendDetectionViaBle()`; `sendMapMarker()` nay nhận cờ 8-bit.
+- **Junction**: thêm `handleJunction()` (rẽ phải vuông góc theo cảm biến dừng) — chưa gọi trong `patrolMove()` (để dành bước tiếp theo).
+- `MAX_DETECTIONS = 8` — camera trả tối đa 8 kết quả.
+
+**heriguard-robot `camera/main.py`**
+- Lệnh `'D'` phân loại **5 label**: crack_small/crack_large (eccentricity > 0.6 + diện tích), moss/mold/stain (3 ngưỡng màu riêng) — giảm false positive do bóng/rêu/nấm mốc. Trả `0xDD + count + N×6 byte [x,y,w,h,label,confidence]` (bbox QQVGA ÷4).
+
+**heriguard-app**
+- `src/lib/ble.ts`: `handleCameraChunk()` parse header 10 byte (nodeX2/shotKind/pan/tilt **từ firmware**); `handleDetectionData()` parse 12 byte — bbox ×4 về 640x480, temp/humid từ packet (fallback dashboardStore). Detection được đưa vào `patrolStore.addDetectionEvent()` + alert khi confidence cao.
+- **Mới `src/app/patrol/[id].tsx`**: màn chi tiết tuần tra — card tổng quan, NodeCard từng node (badge severity, ảnh node, detection meta, delta vs tuần tra trước, TimelineChart, cảnh báo escalation), điều hướng tới node-detail.
+- **Mới `src/app/patrol/node-detail.tsx`**: so sánh ảnh trước/sau (ImageCompareCard), deltaCard (deltaArea %, confidence, nhiệt độ), timeline chart, chip góc chụp (SHOT_KIND_LABELS).
+- `src/app/(tabs)/history.tsx`: thêm **patrol list với node summaries** — tên + ngày, số node/ảnh, chấm severity, dòng cảnh báo node có dấu hiệu; chạm vào → `/patrol/{id}`.
+- `src/store/patrolStore.ts`: `endPatrol()` chạy `shouldEscalateForConsecutiveGrowth()` cho từng node/shot → `useAlertStore.addAlert({ type: "crack_increased" })` khi diện tích tăng liên tiếp qua các tuần tra.
+- **Kiểm tra**: `tsc --noEmit` 0 lỗi (regenerate typed routes cho 2 route patrol mới), `expo lint` 0 lỗi (dọn import thừa trong `[id].tsx` — useEffect, SHOT_KIND_LABELS, RiskColors, biến timelineAll), firmware `pio run` SUCCESS 0 warning.
+
+### 2026-08-15 — Phase A: Node-based image storage + patrol persistence + comparison
+
+**heriguard-app** (toàn bộ phía app, không cần đổi firmware)
+
+- **Mới `src/lib/analyze.ts`**: phân tích 1 ảnh đơn — kết hợp detection Edge-AI (confidence + bbox area) với môi trường (temp/humidity/laser) → severity (low/medium/high) + findings tiếng Việt. `shouldEscalateForTrend()` cho logic cảnh báo.
+- **Mới `src/lib/compare.ts`**: so sánh cùng node giữa các lần tuần tra — `findPreviousImage()` (khớp nodeX2 + shotKind), `computeNodeDelta()` (deltaArea %, deltaConfidence, delta temp/hum, trend), `getNodeTimeline()` (chuỗi thời gian cho chart), `shouldEscalateForConsecutiveGrowth()` (cảnh báo tăng liên tiếp).
+- **Mới `src/types/robot.ts`**: `NodeImage` (uri, frameId, nodeX2, shotKind, pan/tilt, detection, analysis), `DetectionEvent` (link detection → node + shot), mở rộng `PatrolSession` với `images[]`, `detections[]`, giữ `imageUris[]` tương thích ngược. Thêm `SHOT_KIND_LABELS`, `CrackSeverity`.
+- **Mới `src/lib/fileStorage.ts`**: `savePatrolImage()` → lưu ảnh vào `Documents/heriguard/patrols/{id}/node_{nodeX2}/shot_{kind}_{frameId}.jpg` + cập nhật `patrol.json` manifest; `readPatrolJson()`, `updatePatrolJson()`, `listPatrolDirs()`, `loadPersistedPatrols()`.
+- **`src/store/patrolStore.ts`**: `addNodeImage()`, `addDetectionEvent()`, `endPatrol()` (ghi patrol.json lên đĩa), `loadPersistedHistory()` (đọc tất cả tuần tra khi khởi động app → dữ liệu sống sót qua restart).
+- **`src/lib/ble.ts`**: `handleCameraChunk()` lưu ảnh theo node + cập nhật patrol khi tuần tra đang chạy (fallback legacy khi không có patrol); `handleDetectionData()` tạo `DetectionEvent` gắn nodeX2/shotKind.
+- **`src/lib/mockBle.ts`**: mock có tính lặp lại — cùng node = cùng URI ảnh qua các tuần tra, detection tăng dần theo số tuần tra (demo xu hướng vết nứt, ~43% tăng).
+- **`src/app/_layout.tsx`**: gọi `loadPersistedHistory()` khi app khởi động.
+- **Sửa lỗi TS**: type predicate `TimelinePoint` (severity dùng `CrackSeverity`), `NodeImage.detection/analysis` cho phép `null` (khớp JSON khi persist), bỏ import thừa, bỏ `as any` trong mockBle. Regenerate typed routes (fix lỗi sẵn có `router.push("/crack-recognition")`).
+- Docs mới: `QUICK-START.md` (hướng dẫn test), `PHASE-A-COMPLETION.md`, `PHASE-A-TESTING.md`, `EDGE-AI-ASSESSMENT.md`.
+
 ### 2026-08-13 — Fix LED không sáng (sai API setColor) + log lỗi DHT
 
 **heriguard-robot `src/main.cpp`**

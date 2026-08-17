@@ -188,17 +188,17 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 | 6 | **Line following PID** | Đọc Line Tracer error, PID → M3/M4 | ✅ Hoàn thành — `patrolMove()` active |
 | 7 | **Encoder đếm 0.5m** | `getDegrees()` → quy đổi mét | ✅ Hoàn thành — trong `patrolMove()` active |
 | 8 | **Junction detection** | `getJunctionType()` → rẽ | ◐ Đã viết `handleJunction()` nhưng chưa gọi từ `patrolMove()` |
-| 9 | **Wide Scan (INSPECT_A)** | Chụp ảnh, đọc DHT, map marker | ◐ Đã chạy nhưng issue vẫn dùng `random()`; auto-capture + chuyển INSPECT_B còn comment |
-| 10 | **Close Approach (B)** | Laser đo khoảng, tiến 15-20cm | ◐ Code thật đã viết `inspectCloseApproach()`; case INSPECT_B chưa bật trong `runStateMachine()` |
-| 11 | **Scan Low (C)** | RC3 hạ cam, RC4 góc thấp, RC1 pan | ◐ Code thật đã viết `inspectScanLow()`; case INSPECT_C chưa bật, capture khi pan còn TODO |
-| 12 | **Scan High (D)** | RC3 nâng cam, RC4 góc cao, RC1 pan | ◐ Code thật đã viết `inspectScanHigh()`; case INSPECT_D chưa bật, capture khi pan còn TODO |
-| 13 | **Servo control** | RC1-RC4 `setAngle()`, home position | ◐ Đã viết `servoHome()`, `servoPan()`; chỉ dùng trong các scan functions chưa bật |
-| 14 | **Retract (E)** | Gập camera, căn line, về home | ✅ Hoàn thành — `inspectRetract()` active (đơn giản), `inspectRetractFull()` (đầy đủ) chưa dùng |
+| 9 | **Wide Scan (INSPECT_A)** | Chụp ảnh, đọc DHT, map marker | ✅ Hoàn thành — capture + detection thật từ camera (bỏ `random()`), cờ MOSS/MOLD/STAIN/CRACK qua marker |
+| 10 | **Close Approach (B)** | Laser đo khoảng, tiến 15-20cm | ✅ Hoàn thành — `inspectCloseApproach()` bật trong `runStateMachine()` |
+| 11 | **Scan Low (C)** | RC3 hạ cam, RC4 góc thấp, RC1 pan | ✅ Hoàn thành — `inspectScanLow()` bật, capture + detect khi pan |
+| 12 | **Scan High (D)** | RC3 nâng cam, RC4 góc cao, RC1 pan | ✅ Hoàn thành — `inspectScanHigh()` bật, capture + detect khi pan |
+| 13 | **Servo control** | RC1-RC4 `setAngle()`, home position | ✅ Hoàn thành — `servoHome()` (gọi lúc start patrol) + `servoPan()` L/C/R, tilt low/high |
+| 14 | **Retract (E)** | Gập camera, căn line, về home | ✅ Hoàn thành — `inspectRetract()` active; `inspectRetractFull()` đã viết chưa dùng |
 | 15 | **Laser obstacle** | `getDistance()` < 200mm → dừng | ✅ Hoàn thành — `checkObstacle()` active |
 | 16 | **IMU** | `getAccelY()` → giảm tốc khi nghiêng | ✅ Hoàn thành — trong loop active |
-| 17 | **Virtual map** | Ghi marker sau mỗi inspect, gửi BLE | ✅ Hoàn thành — `sendMapMarker()` active |
-| 18 | **Camera JPEG chunk** | Nhận JPEG UART → chunk → notify | ✅ Hoàn thành — `captureJpegFromCam()` + `sendJpegViaBle()` active |
-| 19 | **SmartCam detection** | Đọc detection từ camera UART | ◐ Trong comment block — `captureAndSendDetection()` chờ bỏ comment |
+| 17 | **Virtual map** | Ghi marker sau mỗi inspect, gửi BLE | ✅ Hoàn thành — `sendMapMarker()` active (flags 8-bit) |
+| 18 | **Camera JPEG chunk** | Nhận JPEG UART → chunk → notify | ✅ Hoàn thành — header 10 byte: frameId+nodeX2+shotKind+pan+tilt+chunkIdx+total |
+| 19 | **SmartCam detection** | Đọc detection từ camera UART | ✅ Hoàn thành — `readDetectionFromCam()` + `sendDetectionViaBle()` (12 byte) |
 | 20 | **OLED display** | Hiển thị state, sensor, BLE status | ✅ Hoàn thành — `updateDisplay()` active |
 | 21 | **Buzzer/LED** | Âm thanh + đèn theo state | ✅ Hoàn thành |
 
@@ -218,7 +218,7 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 | 10 | **deviceStore sửa** | `store/deviceStore.ts` | ✅ Hoàn thành — đã thêm `robotState`, `patrolActive`, `CameraImage` |
 | 11 | **Dashboard sửa** | `app/(tabs)/index.tsx` | ✅ Hoàn thành — tích hợp StateIndicator + ControlPanel + VirtualMap + CameraCard + MiniChart + TrendSummary |
 | 12 | **Camera tab sửa** | `app/(tabs)/camera.tsx` | ✅ Hoàn thành — carousel ảnh + bounding box overlay theo `img.detections` |
-| 13 | **History tab sửa** | `app/(tabs)/history.tsx` | ✅ Hoàn thành — kết nối patrolStore + detectionStore |
+| 13 | **History tab sửa** | `app/(tabs)/history.tsx` | ✅ Hoàn thành — patrol list + node summaries (node/ảnh/severity/issue) + link vào `/patrol/{id}` |
 | 14 | **AI tab sửa** | `app/(tabs)/ai.tsx` | ✅ Hoàn thành — tích hợp Gemini API |
 | 15 | **Settings tab** | `app/(tabs)/settings.tsx` | ✅ Hoàn thành — BLE mock mode + Gemini API key + scan button |
 | 16 | **Mock BLE sửa** | `lib/mockBle.ts` | ✅ Hoàn thành — mock state transitions + map data + detection + alert |
@@ -226,6 +226,9 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 | 18 | **Alert system** | `store/alertStore.ts` | ✅ Hoàn thành — `triggerFromDetection()`, `dismissAlert()`, `dismissAll()` |
 | 19 | **Notification** | `hooks/useNotification.ts` | ✅ Hoàn thành — expo-notifications khi high risk |
 | 20 | **BLE detection char** | `lib/ble.ts` | ✅ Hoàn thành — `handleDetectionData()` subscribe CHAR_DETECTION |
+| 21 | **Patrol detail screen** | `app/patrol/[id].tsx` | ✅ Hoàn thành — card tổng quan + NodeCard (severity, delta, TimelineChart, escalation) + link node-detail |
+| 22 | **Node detail screen** | `app/patrol/node-detail.tsx` | ✅ Hoàn thành — 2 ảnh trước/sau + deltaCard + timeline + shot chips |
+| 23 | **Trend alert** | `store/patrolStore.ts` | ✅ Hoàn thành — `endPatrol()` chạy `shouldEscalateForConsecutiveGrowth()` → alert `crack_increased` |
 
 ### 4.3 Camera — OpenMV Script (`main.py` trên M-Vision Cam)
 
@@ -245,8 +248,11 @@ Vòng lặp chính (~20-50ms mỗi cycle):
 > - ✅ Phase 4 (Camera JPEG + UART): **Hoàn thành**
 > - ✅ Phase 5 (Alert + Notification): **Hoàn thành**
 > - ✅ Phase 7 (Gemini AI): **Hoàn thành**
-> - ◐ Phase 2 (Patrol + State Machine): **Cơ bản — junction viết sẵn chưa gọi; case INSPECT_B/C/D còn comment**
-> - ◐ Phase 3 (Scan Low/High + Servo): **Code thật đã viết, chưa bật trong state machine + chưa capture khi pan**
+> - ✅ Phase A (Persistent Patrol Archive): **Hoàn thành** — lưu ảnh theo node (`patrols/{id}/node_{}/`), patrol.json manifest, load khi khởi động app, engine so sánh xu hướng (`lib/compare.ts` + `lib/analyze.ts`)
+> - ✅ Phase B (Firmware protocol): **Hoàn thành** — header 10 byte + detection 12 byte, INSPECT_A/B/C/D bật, capture + detect thật khi pan, servo pan/tilt
+> - ✅ Phase C (UI so sánh): **Hoàn thành** — patrol detail + node detail (2 ảnh trước/sau + delta + timeline chart) + trend alert `crack_increased`
+> - ◐ Phase 2 (Patrol + State Machine): **Cơ bản — INSPECT_B/C/D đã bật; còn `handleJunction()` viết sẵn chưa gọi trong `patrolMove()`**
+> - ◐ Phase 3 (Scan Low/High + Servo): **Hoàn thành** — code thật đã bật trong state machine, capture khi pan đã có; `inspectRetractFull()` chưa dùng
 > - ⬜ Phase 6 (Testing + Demo): **Chưa làm**
 
 ### Phase 1: BLE Foundation + Sensor — ✅ **Hoàn thành**
@@ -519,9 +525,13 @@ Byte 7-8: timestamp          uint16 seconds since patrol start
 
 ```
 Byte 0-1: frameId (uint16)       tăng dần mỗi ảnh
-Byte 2-3: chunkIndex (uint16)    0-based
-Byte 4-5: totalChunks (uint16)   tổng số chunk
-Byte 6+:  JPEG payload
+Byte 2:   nodeX2                 số nửa mét (0=0m, 1=0.5m, ...) — từ firmware
+Byte 3:   shotKind               0=wide, 1=close_approach, 2=scan_low, 3=scan_high
+Byte 4:   pan                    góc servo RC1 (độ)
+Byte 5:   tilt                   góc servo RC3 (độ)
+Byte 6-7: chunkIndex (uint16)    0-based
+Byte 8-9: totalChunks (uint16)   tổng số chunk
+Byte 10+: JPEG payload
 ```
 
 ### Detection (...def2) — Robot → App
@@ -530,10 +540,12 @@ Byte 6+:  JPEG payload
 Byte 0: label                   0=crack_small, 1=crack_large, 2=moss,
                                  3=mold, 4=stain
 Byte 1: confidence              0-100
-Byte 2-3: bounding_box_x        center x (pixels, 0-640)
-Byte 4-5: bounding_box_y        center y (pixels, 0-480)
-Byte 6-7: bounding_box_w        width (pixels)
-Byte 8-9: bounding_box_h        height (pixels)
+Byte 2: nodeX2                  số nửa mét — từ firmware
+Byte 3: shotKind                0=wide, 1=close_approach, 2=scan_low, 3=scan_high
+Byte 4-5: bounding_box_x        center x (pixels QQVGA ÷4, app ×4 → 0-640)
+Byte 6-7: bounding_box_y        center y (pixels, app ×4 → 0-480)
+Byte 8-9: bounding_box_w        width (pixels, app ×4)
+Byte 10-11: bounding_box_h      height (pixels, app ×4)
 ```
 
 ### Command (...def4) — App → Robot

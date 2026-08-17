@@ -42,11 +42,11 @@ export function ControlPanel() {
 
         <TouchableOpacity
           style={[styles.btn, styles.btnCapture, !canControl && styles.btnDisabled]}
-          onPress={() => handleCommand("C")}
+          onPress={() => handleCommand("N")}
           disabled={!canControl}
           activeOpacity={0.7}
         >
-          <Text style={[styles.btnText, styles.btnTextCapture]}>Chụp ảnh</Text>
+          <Text style={[styles.btnText, styles.btnTextCapture]}>Chụp + Nhận diện</Text>
         </TouchableOpacity>
       </View>
 

@@ -40,25 +40,57 @@ while True:
             uart.write(bytes([checksum]))
 
         elif cmd == b'D':
-            # AI crack detection on-device
+            # AI detection on-device: dark cracks + màu (moss/mold/stain)
             img = sensor.snapshot()
+            results = []  # (x, y, w, h, label, confidence)
+
+            # 1) Dark cracks (vết nứt — blob tối, dài/hẹp)
             dark_threshold = (0, 60, -32, 32, -32, 32)
-            blobs = img.find_blobs([dark_threshold], pixels_threshold=80, area_threshold=80, merge=True)
-            cracks = []
-            for b in blobs:
+            for b in img.find_blobs([dark_threshold], pixels_threshold=80, area_threshold=80, merge=True):
                 if b.area() < 150 or b.w() < 4:
                     continue
                 eccentricity = math.sqrt(1 - (b.h() / b.w())**2) if b.w() > 0 else 0
                 if eccentricity > 0.6:
+                    label = 1 if b.area() > 800 else 0  # crack_large / crack_small
                     confidence = min(0.95, 0.45 + (b.area() / 3200) + (eccentricity * 0.15))
-                    cracks.append({
-                        "x": b.cx(), "y": b.cy(),
-                        "w": b.w(), "h": b.h(),
-                        "confidence": round(confidence, 2)
-                    })
+                    results.append((b.cx()>>2, b.cy()>>2, b.w()>>2, b.h()>>2, label, int(confidence*100)))
                     img.draw_rectangle(b.rect(), color=(255, 0, 0))
-            count = len(cracks)
+
+            # 2) Moss (xanh rêu – bám trên đá)
+            moss_threshold = (30, 90, -40, -5, 10, 45)
+            for b in img.find_blobs([moss_threshold], pixels_threshold=120, area_threshold=120, merge=True):
+                if b.area() < 180 or b.w() < 4:
+                    continue
+                # blob màu đồng đều → moss, bỏ qua vùng lẫn crack tối
+                stats = img.get_statistics(roi=b.rect())
+                if stats.l_mean() < 30:
+                    continue  # quá tối -> crack đã xử lý
+                confidence = min(0.9, 0.4 + (b.area() / 4000))
+                results.append((b.cx()>>2, b.cy()>>2, b.w()>>2, b.h()>>2, 2, int(confidence*100)))
+                img.draw_rectangle(b.rect(), color=(0, 255, 0))
+
+            # 3) Mold (mốc trắng/xám)
+            mold_threshold = (70, 130, -20, 20, -20, 20)
+            for b in img.find_blobs([mold_threshold], pixels_threshold=150, area_threshold=150, merge=True):
+                if b.area() < 200 or b.w() < 4:
+                    continue
+                confidence = min(0.9, 0.4 + (b.area() / 5000))
+                results.append((b.cx()>>2, b.cy()>>2, b.w()>>2, b.h()>>2, 3, int(confidence*100)))
+                img.draw_rectangle(b.rect(), color=(255, 255, 0))
+
+            # 4) Stain (vết ố nâu/vàng)
+            stain_threshold = (40, 110, 0, 50, -15, 35)
+            for b in img.find_blobs([stain_threshold], pixels_threshold=150, area_threshold=150, merge=True):
+                if b.area() < 200 or b.w() < 4:
+                    continue
+                confidence = min(0.9, 0.4 + (b.area() / 5000))
+                results.append((b.cx()>>2, b.cy()>>2, b.w()>>2, b.h()>>2, 4, int(confidence*100)))
+                img.draw_rectangle(b.rect(), color=(255, 165, 0))
+
+            # Giới hạn số kết quả — tránh tràn buffer firmware (MAX_DETECTIONS=8)
+            results = results[:8]
+            count = len(results)
             uart.write(bytes([0xDD, count & 0xFF]))
-            for c in cracks:
-                packet = pack("<BBBBBB", c["x"]>>2, c["y"]>>2, c["w"]>>2, c["h"]>>2, int(c["confidence"]*100), 0)
+            for r in results:
+                packet = pack("<BBBBBB", r[0], r[1], r[2], r[3], r[4], r[5])
                 uart.write(packet)

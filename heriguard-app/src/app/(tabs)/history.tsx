@@ -1,8 +1,11 @@
-import { View, Text, ScrollView, StyleSheet } from "react-native";
+import { View, Text, ScrollView, StyleSheet, Pressable, Image } from "react-native";
+import { useRouter } from "expo-router";
 import { PlaqueCard } from "@/components/shared/PlaqueCard";
 import { usePatrolStore } from "@/store/patrolStore";
 import { useDetectionStore } from "@/store/detectionStore";
 import { useDashboardStore } from "@/store/dashboardStore";
+import { computeNodeDelta } from "@/lib/compare";
+import type { NodeImage } from "@/types/robot";
 import { Colors, Font } from "@/constants/theme";
 
 const LABEL_COLORS: Record<string, string> = {
@@ -13,7 +16,62 @@ const LABEL_COLORS: Record<string, string> = {
   stain: "#6B4F8A",
 };
 
+function severityColor(severity?: string): string {
+  if (severity === "high") return Colors.lacquer;
+  if (severity === "medium") return Colors.gold;
+  return Colors.jade;
+}
+
+/**
+ * Lưu trữ theo node: mỗi node 1 thẻ, ảnh từng lần tuần tra ngang hàng
+ * kèm Δ so với lần trước (diện tích vết nứt). Chạm vào → so sánh chi tiết.
+ */
+interface NodeArchiveEntry {
+  patrolId: string;
+  patrolDate: Date;
+  image: NodeImage;
+}
+
+function buildNodeArchive(patrols: ReturnType<typeof usePatrolStore.getState>["patrols"]) {
+  const nodes = new Map<number, NodeArchiveEntry[]>();
+  for (const patrol of patrols) {
+    const seen = new Map<number, NodeImage>();
+    // Ưu tiên shot wide (0), giữ 1 ảnh/node/lần tuần tra
+    const sorted = [...patrol.images].sort((a, b) => {
+      if (a.nodeX2 !== b.nodeX2) return a.nodeX2 - b.nodeX2;
+      const kindDiff = (a.shotKind === 0 ? 0 : 1) - (b.shotKind === 0 ? 0 : 1);
+      if (kindDiff !== 0) return kindDiff;
+      return b.frameId - a.frameId;
+    });
+    for (const image of sorted) {
+      if (seen.has(image.nodeX2)) continue;
+      seen.set(image.nodeX2, image);
+    }
+    seen.forEach((image, nodeX2) => {
+      const list = nodes.get(nodeX2) ?? [];
+      list.push({ patrolId: patrol.id, patrolDate: new Date(patrol.startTime), image });
+      nodes.set(nodeX2, list);
+    });
+  }
+  // Node tăng dần, trong node: mới nhất trước
+  for (const [, list] of nodes) list.sort((a, b) => b.patrolDate.getTime() - a.patrolDate.getTime());
+  return [...nodes.entries()].sort((a, b) => a[0] - b[0]);
+}
+
+function DeltaLabel({ areaPercent }: { areaPercent: number }) {
+  const increasing = areaPercent > 5;
+  const decreasing = areaPercent < -5;
+  const color = increasing ? Colors.lacquer : decreasing ? Colors.jade : Colors.inkSoft;
+  const text = increasing
+    ? `▲ +${Math.abs(areaPercent).toFixed(1)}%`
+    : decreasing
+      ? `▼ -${Math.abs(areaPercent).toFixed(1)}%`
+      : "➡ 0%";
+  return <Text style={[styles.deltaLabel, { color }]}>{text}</Text>;
+}
+
 export default function HistoryScreen() {
+  const router = useRouter();
   const patrols = usePatrolStore((s) => s.patrols);
   const allDetections = useDetectionStore((s) => s.detections);
   const chartData = useDashboardStore((s) => s.chartData);
@@ -73,10 +131,80 @@ export default function HistoryScreen() {
     high: Colors.lacquer,
   };
 
+  const nodeArchive = buildNodeArchive(patrols);
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Lịch sử đo</Text>
       <Text style={styles.subtitle}>Các lần tuần tra và phát hiện</Text>
+
+      {/* ── Lưu trữ theo node (so sánh các lần tuần tra cùng node) ── */}
+      {nodeArchive.length > 0 && (
+        <PlaqueCard label="Lưu trữ theo node" style={styles.archiveCard}>
+          {nodeArchive.map(([nodeX2, entries]) => {
+            const previous = entries[1] ?? null;
+            const latest = entries[0]?.image ?? null;
+            const delta = latest && previous ? computeNodeDelta(latest, previous.image) : null;
+            const deltaArea = delta?.deltaAreaPercent ?? 0;
+            return (
+              <Pressable
+                key={nodeX2}
+                style={({ pressed }) => [styles.nodeItem, pressed && { opacity: 0.8 }]}
+                onPress={() =>
+                  router.push(
+                    `/patrol/node-detail?patrolId=${entries[0].patrolId}&node=${nodeX2}`
+                  )
+                }
+              >
+                <View style={styles.nodeHeader}>
+                  <Text style={styles.nodeTitle}>Node {nodeX2}</Text>
+                  <Text style={styles.nodeMeta}>
+                    {(nodeX2 * 0.5).toFixed(1)}m · {entries.length} lần tuần tra
+                  </Text>
+                  {delta && <DeltaLabel areaPercent={deltaArea} />}
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {entries.map((entry, index) => {
+                    const isLatest = index === 0;
+                    const prevEntry = entries[index + 1] ?? null;
+                    const entryDelta = isLatest && prevEntry ? computeNodeDelta(entry.image, prevEntry.image) : null;
+                    return (
+                      <View key={`${entry.patrolId}-${nodeX2}`} style={styles.nodeShot}>
+                        <View style={styles.nodeThumbWrap}>
+                          {entry.image.uri && (
+                            <Image
+                              source={{ uri: entry.image.uri }}
+                              style={styles.nodeThumb}
+                              resizeMode="cover"
+                            />
+                          )}
+                          <View
+                            style={[
+                              styles.nodeSeverityBar,
+                              { backgroundColor: severityColor(entry.image.analysis?.severity) },
+                            ]}
+                          />
+                        </View>
+                        <Text style={styles.nodeShotDate}>
+                          {isLatest ? "Mới nhất" : `Lần ${index + 1}`}
+                          {"\n"}
+                          {entry.patrolDate.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" })}
+                        </Text>
+                        {entryDelta && <DeltaLabel areaPercent={entryDelta.deltaAreaPercent} />}
+                        {entry.image.detection && (
+                          <Text style={styles.nodeShotDetect}>
+                            {(entry.image.detection.confidence * 100).toFixed(0)}%
+                          </Text>
+                        )}
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </Pressable>
+            );
+          })}
+        </PlaqueCard>
+      )}
 
       {summary && (
         <PlaqueCard label="Tổng quan" style={styles.summaryCard}>
@@ -98,6 +226,52 @@ export default function HistoryScreen() {
               <Text style={styles.summaryLabel}>Nguy cơ cao</Text>
             </View>
           </View>
+        </PlaqueCard>
+      )}
+
+      {/* ── Patrol list with node summaries (Phase C) ── */}
+      {hasPatrolData && (
+        <PlaqueCard label="Các lần tuần tra" style={styles.patrolCard}>
+          {patrols.map((p) => {
+            const nodeCount = new Set(p.images.map((i) => i.nodeX2)).size;
+            const worstSeverity = [...p.images]
+              .map((i) => i.analysis?.severity)
+              .filter(Boolean)
+              .sort((a, b) => (a === "high" ? 1 : a === "medium" ? 0 : -1) - (b === "high" ? 1 : b === "medium" ? 0 : -1))
+              .at(-1);
+
+            const issueNodes = [...new Set(p.detections.map((d) => d.nodeX2))];
+
+            return (
+              <Pressable
+                key={p.id}
+                style={({ pressed }) => [styles.patrolItem, pressed && { opacity: 0.8 }]}
+                onPress={() => router.push(`/patrol/${p.id}`)}
+              >
+                <View style={styles.patrolRow}>
+                  <Text style={styles.patrolName}>
+                    Tuần tra {new Date(p.startTime).toLocaleDateString("vi-VN")}
+                  </Text>
+                  <View
+                    style={[
+                      styles.worstDot,
+                      { backgroundColor: severityColor(worstSeverity as string | undefined) },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.patrolTime}>
+                  {new Date(p.startTime).toLocaleTimeString("vi-VN")} —{" "}
+                  {p.endTime ? new Date(p.endTime).toLocaleTimeString("vi-VN") : "đang chạy"} ·{" "}
+                  {nodeCount} node · {p.images.length} ảnh
+                </Text>
+                {issueNodes.length > 0 && (
+                  <Text style={styles.patrolIssues}>
+                    ⚠ Có dấu hiệu tại node {issueNodes.sort((a, b) => a - b).join(", ")}
+                  </Text>
+                )}
+              </Pressable>
+            );
+          })}
         </PlaqueCard>
       )}
 
@@ -144,7 +318,7 @@ export default function HistoryScreen() {
       <View style={styles.footer}>
         <Text style={styles.footerText}>
           {hasPatrolData
-            ? `${rows.length} bản ghi từ ${patrols.length} lần tuần tra`
+            ? `${rows.length} bản ghi từ ${patrols.length} lần tuần tra — chạm vào tuần tra để xem chi tiết`
             : "Chế độ chờ — kết nối robot hoặc bật mô phỏng để có dữ liệu"}
         </Text>
       </View>
@@ -172,6 +346,75 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.inkSoft,
     marginBottom: 16,
+  },
+  archiveCard: {
+    padding: 12,
+    marginBottom: 14,
+    gap: 10,
+  },
+  nodeItem: {
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.line,
+    paddingBottom: 12,
+  },
+  nodeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  nodeTitle: {
+    fontFamily: Font.bold,
+    fontSize: 14,
+    color: Colors.ink,
+  },
+  nodeMeta: {
+    fontFamily: Font.regular,
+    fontSize: 10,
+    color: Colors.inkSoft,
+    flex: 1,
+  },
+  nodeShot: {
+    alignItems: "center",
+    marginRight: 10,
+  },
+  nodeThumbWrap: {
+    width: 64,
+    height: 48,
+    borderRadius: 3,
+    overflow: "hidden",
+    backgroundColor: Colors.jadeLight,
+    position: "relative",
+  },
+  nodeThumb: {
+    width: "100%",
+    height: "100%",
+  },
+  nodeSeverityBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 3,
+  },
+  nodeShotDate: {
+    fontFamily: Font.regular,
+    fontSize: 8,
+    color: Colors.inkSoft,
+    textAlign: "center",
+    marginTop: 4,
+    lineHeight: 10,
+  },
+  nodeShotDetect: {
+    fontFamily: Font.bold,
+    fontSize: 8,
+    color: Colors.lacquer,
+    marginTop: 1,
+  },
+  deltaLabel: {
+    fontFamily: Font.bold,
+    fontSize: 9,
+    marginTop: 2,
   },
   summaryCard: {
     padding: 14,
@@ -203,6 +446,43 @@ const styles = StyleSheet.create({
     width: 1,
     height: 32,
     backgroundColor: Colors.line,
+  },
+  patrolCard: {
+    padding: 12,
+    marginBottom: 14,
+    gap: 4,
+  },
+  patrolItem: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.line,
+  },
+  patrolRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  patrolName: {
+    fontFamily: Font.bold,
+    fontSize: 13,
+    color: Colors.ink,
+  },
+  patrolTime: {
+    fontFamily: Font.regular,
+    fontSize: 10,
+    color: Colors.inkSoft,
+    marginTop: 2,
+  },
+  patrolIssues: {
+    fontFamily: Font.bold,
+    fontSize: 10,
+    color: Colors.lacquer,
+    marginTop: 2,
+  },
+  worstDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   tableCard: {
     padding: 12,

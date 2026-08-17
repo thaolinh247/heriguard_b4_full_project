@@ -19,6 +19,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   lastUpdate: null,
 
   updateSensor: (temp: number, humidity: number) => {
+    // DHT lỗi trên robot có thể gửi 0/0 hoặc NaN — bỏ qua, giữ giá trị cũ
+    if (!Number.isFinite(temp) || !Number.isFinite(humidity)) return;
+    if (temp === 0 && humidity === 0) return;
     const risk = assessRisk(temp, humidity);
     const now = new Date().toLocaleTimeString("vi-VN");
     set({

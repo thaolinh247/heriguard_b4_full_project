@@ -5,7 +5,16 @@ import { Directory, File, Paths } from "expo-file-system";
 import { useDeviceStore } from "@/store/deviceStore";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { usePatrolStore } from "@/store/patrolStore";
-import { ROBOT_STATE_VALUES, type RobotState, type MapMarker } from "@/types/robot";
+import {
+  ROBOT_STATE_VALUES,
+  type RobotState,
+  type MapMarker,
+  type NodeImage,
+  type ShotKind,
+  type DetectionEvent,
+} from "@/types/robot";
+import { savePatrolImage } from "@/lib/fileStorage";
+import { saveStaticCaptureFromUri } from "@/lib/staticCapture";
 
 const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
 const CHAR_CAMERA_DATA = "12345678-1234-5678-1234-56789abcdef1";
@@ -197,7 +206,7 @@ export function startScan(
     if (device && isHeriGuardDevice(device)) {
       onDeviceFound(device);
     }
-  }).catch(() => {});
+  }).catch(() => { });
 
   setTimeout(() => {
     m.stopDeviceScan();
@@ -262,12 +271,16 @@ async function saveJpegBytes(jpegBytes: number[], frameId: number): Promise<stri
 }
 
 function handleCameraChunk(data: number[]) {
-  // Chunk format: [frameId(2), chunkIndex(2), totalChunks(2), ...payload]
-  if (data.length < 6) return;
+  // Chunk format (firmware Phase B): [frameId(2), nodeX2(1), shotKind(1), pan(1), tilt(1), chunkIdx(2), totalChunks(2), ...payload]
+  if (data.length < 10) return;
   const frameId = data[0] | (data[1] << 8);
-  const chunkIndex = data[2] | (data[3] << 8);
-  const totalChunks = data[4] | (data[5] << 8);
-  const payload = data.slice(6);
+  const nodeX2 = data[2];
+  const shotKindRaw = data[3];
+  const pan = data[4];
+  const tilt = data[5];
+  const chunkIndex = data[6] | (data[7] << 8);
+  const totalChunks = data[8] | (data[9] << 8);
+  const payload = data.slice(10);
 
   if (frameId !== cameraFrameId) {
     cameraChunks = [];
@@ -280,20 +293,73 @@ function handleCameraChunk(data: number[]) {
   const receivedCount = cameraChunks.filter((c) => c !== undefined).length;
   if (receivedCount === cameraExpectedChunks && cameraExpectedChunks > 0) {
     const jpegBytes = cameraChunks.flat();
+    const base64 = bytesToBase64Chunked(jpegBytes);
 
-    const store = useDeviceStore.getState();
-    const temp = useDashboardStore.getState().currentTemp ?? 0;
-    const humidity = useDashboardStore.getState().currentHumidity ?? 0;
+    // Get current patrol and environment data
+    const patrolStore = usePatrolStore.getState();
+    const dashboardStore = useDashboardStore.getState();
+    const temp = dashboardStore.currentTemp ?? 0;
+    const humidity = dashboardStore.currentHumidity ?? 0;
+    const currentPatrol = patrolStore.currentSession;
 
-    saveJpegBytes(jpegBytes, cameraFrameId).then((uri) => {
-      store.addImage({
-        id: `ble-${cameraFrameId}`,
-        uri,
-        timestamp: new Date().toLocaleTimeString("vi-VN"),
-        temp,
-        humidity,
+    if (!currentPatrol) {
+      // Lệnh 'N' (Chụp & Nhận diện): robot chỉ gửi ảnh. App chạy AI —
+      // nếu đạt ngưỡng → lưu ảnh + nhiệt độ/độ ẩm tại node + phân tích.
+      const store = useDeviceStore.getState();
+      saveJpegBytes(jpegBytes, cameraFrameId)
+        .then(async (uri) => {
+          const outcome = await saveStaticCaptureFromUri(uri, nodeX2, temp, humidity);
+          store.addImage({
+            id: `ble-${cameraFrameId}`,
+            uri,
+            timestamp: new Date().toLocaleTimeString("vi-VN"),
+            temp,
+            humidity,
+            detections: outcome.nodeImage?.detection
+              ? [
+                  {
+                    label: outcome.nodeImage.detection.label,
+                    confidence: outcome.nodeImage.detection.confidence,
+                  },
+                ]
+              : undefined,
+          });
+          if (outcome.reason === "error") {
+            console.warn("[BLE] Static capture AI failed:", outcome.error);
+          }
+        })
+        .catch((error) => console.warn("[BLE] Static capture save failed:", error));
+      return;
+    }
+
+    // nodeX2, shotKind, pan, tilt giờ đến trực tiếp từ firmware (header 10 byte)
+    const shotKind: ShotKind = (shotKindRaw as ShotKind) <= 3 ? (shotKindRaw as ShotKind) : 0;
+    const node: number = nodeX2;
+
+    // Create NodeImage object
+    const nodeImageData: Omit<NodeImage, "uri"> = {
+      frameId,
+      nodeX2: node,
+      shotKind,
+      pan,
+      tilt,
+      timestamp: new Date().toISOString(),
+      temperature: temp,
+      humidity,
+    };
+
+    // Save to disk and update patrol manifest
+    savePatrolImage(currentPatrol.id, node, shotKind, frameId, base64, nodeImageData)
+      .then((nodeImage) => {
+        // Add to patrolStore
+        patrolStore.addNodeImage(nodeImage);
+        console.log(
+          `[BLE] Image saved: node ${node}, shot ${shotKind}, pan ${pan}, tilt ${tilt}, frame ${frameId}`
+        );
+      })
+      .catch((error) => {
+        console.warn("[BLE] Failed to save image:", error);
       });
-    });
 
     cameraChunks = [];
     cameraExpectedChunks = 0;
@@ -323,22 +389,79 @@ function handleStatusData(data: number[]) {
 }
 
 function handleDetectionData(data: number[]) {
-  if (data.length < 2) return;
+  // Detection format (Phase B): [label(1), confidence(1), nodeX2(1), shotKind(1), x(1), y(1), w(1), h(1), temp_lo, temp_hi, hum_lo, hum_hi(4)]
+  if (data.length < 12) return;
   const label = data[0];
-  const confidence = data[1] / 100;
+  const rawConfidence = data[1];
+  const rawNodeX2 = data[2];
+  const rawShotKind = data[3];
+  const bboxX = data[4];
+  const bboxY = data[5];
+  const bboxW = data[6];
+  const bboxH = data[7];
+  const tempRaw = (data[8] | (data[9] << 8)) / 100;
+  const humidityRaw = (data[10] | (data[11] << 8)) / 100;
+
   const labelNames: Record<number, string> = {
-    0: "crack_small", 1: "crack_large", 2: "moss",
-    3: "mold", 4: "stain",
+    0: "crack_small",
+    1: "crack_large",
+    2: "moss",
+    3: "mold",
+    4: "stain",
   };
-  const name = labelNames[label] ?? "unknown";
-  useDeviceStore.getState().addImage({
-    id: `detect-${Date.now()}`,
-    uri: "",
-    timestamp: new Date().toLocaleTimeString("vi-VN"),
-    temp: useDashboardStore.getState().currentTemp ?? 0,
-    humidity: useDashboardStore.getState().currentHumidity ?? 0,
-    detections: [{ label: name, confidence }],
-  });
+  const detectionLabel = labelNames[label] ?? "unknown";
+  const confidence = rawConfidence / 100;
+
+  // Get current patrol
+  const patrolStore = usePatrolStore.getState();
+  const dashboardStore = useDashboardStore.getState();
+  const currentPatrol = patrolStore.currentSession;
+
+  if (!currentPatrol) {
+    console.warn(
+      "[BLE] Detection received but no active patrol — storing in legacy imageHistory"
+    );
+    // Fallback: store in deviceStore (legacy behavior)
+    const store = useDeviceStore.getState();
+    store.addImage({
+      id: `detect-${Date.now()}`,
+      uri: "",
+      timestamp: new Date().toLocaleTimeString("vi-VN"),
+      temp: dashboardStore.currentTemp ?? 0,
+      humidity: dashboardStore.currentHumidity ?? 0,
+      detections: [{ label: detectionLabel, confidence }],
+    });
+    return;
+  }
+
+  // nodeX2 + shotKind giờ đến trực tiếp từ firmware
+  const nodeX2 = rawNodeX2;
+  const shotKind: ShotKind = (rawShotKind as ShotKind) <= 3 ? (rawShotKind as ShotKind) : 0;
+  const temp = tempRaw !== 0 ? tempRaw : (dashboardStore.currentTemp ?? 0);
+  const humidity = humidityRaw !== 0 ? humidityRaw : (dashboardStore.currentHumidity ?? 0);
+
+  const detectionEvent: DetectionEvent = {
+    id: `detection-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    nodeX2,
+    shotKind,
+    label: detectionLabel,
+    confidence,
+    bbox: {
+      x: bboxX * 4, // QQVGA 160x120 → 640x480
+      y: bboxY * 4,
+      width: bboxW * 4,
+      height: bboxH * 4,
+    },
+    temperature: temp,
+    humidity,
+  };
+
+  // Add to patrol
+  patrolStore.addDetectionEvent(detectionEvent);
+  console.log(
+    `[BLE] Detection: node ${nodeX2}, shot ${shotKind}, ${detectionLabel} (${confidence * 100}%)`
+  );
 }
 
 function handleMapMarker(data: number[]) {
@@ -468,7 +591,7 @@ async function doConnectToDevice(device: Device): Promise<ConnectResult> {
       if (!dropped) throw discoverError;
 
       console.warn("BLE discover failed, retrying connect once:", discoverError);
-      await connected.cancelConnection().catch(() => {});
+      await connected.cancelConnection().catch(() => { });
       connected = await withTimeout(device.connect({ timeout: 10000 }), 12000);
       await withTimeout(connected.discoverAllServicesAndCharacteristics(), 10000);
     }
@@ -524,7 +647,7 @@ export function disconnect() {
   cameraFrameId = 0;
 
   if (connectedDevice) {
-    connectedDevice.cancelConnection().catch(() => {});
+    connectedDevice.cancelConnection().catch(() => { });
     connectedDevice = null;
   }
 
