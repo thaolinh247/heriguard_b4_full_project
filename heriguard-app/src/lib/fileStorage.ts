@@ -3,7 +3,21 @@ import type { PatrolSession, NodeImage, ShotKind } from "@/types/robot";
 
 function ensureDir(dir: Directory): void {
   try {
+    // createDirectory("") chỉ tạo 1 cấp — dùng legacy API để tạo cả parent
     dir.createDirectory("");
+  } catch {
+    // already exists
+  }
+}
+
+/**
+ * Async version — đảm bảo thư mục tồn tại, tạo cả parent nếu cần.
+ * Dùng cho writePatrolManifest khi thư mục có thể chưa tồn tại.
+ */
+async function ensureDirAsync(dir: Directory): Promise<void> {
+  const legacy = await import("expo-file-system/legacy");
+  try {
+    await legacy.makeDirectoryAsync(dir.uri, { intermediates: true });
   } catch {
     // already exists
   }
@@ -16,7 +30,11 @@ function heriguardDir(): Directory {
 }
 
 function patrolDir(patrolId: string): Directory {
-  const dir = new Directory(heriguardDir(), "patrols", patrolId);
+  const root = heriguardDir();
+  // Tạo heriguard/patrols/ trước nếu chưa có
+  const patrolsParent = new Directory(root, "patrols");
+  ensureDir(patrolsParent);
+  const dir = new Directory(patrolsParent, patrolId);
   ensureDir(dir);
   return dir;
 }
@@ -271,6 +289,36 @@ export async function updatePatrolJson(
 }
 
 /**
+ * Write complete patrol.json directly — no read needed.
+ * Dùng cho seed data: tạo manifest mới từ đầu (tránh race condition
+ * giữa savePatrolImageFromFile và updatePatrolJson).
+ * Tự tạo thư mục cha nếu chưa tồn tại.
+ */
+export async function writePatrolManifest(
+  patrolId: string,
+  session: PatrolSession
+): Promise<void> {
+  const fs = await import("expo-file-system");
+  const legacy = await import("expo-file-system/legacy");
+
+  // Đảm bảo thư mục patrol tồn tại (heriguard/patrols/{patrolId}/)
+  await ensureDirAsync(patrolDir(patrolId));
+
+  const manifestPath = getPatrolManifestPath(patrolId);
+  const json = JSON.stringify(session, null, 2);
+  try {
+    await legacy.writeAsStringAsync(manifestPath, json, {
+      encoding: fs.EncodingType.UTF8,
+    });
+    console.log(
+      `[FileStorage] writePatrolManifest OK: ${patrolId} (${session.images.length} images, path=${manifestPath})`
+    );
+  } catch (err) {
+    console.warn(`[FileStorage] writePatrolManifest FAIL: ${patrolId}`, err);
+  }
+}
+
+/**
  * List all patrol directories under heriguard/patrols/
  */
 export async function listPatrolDirs(): Promise<string[]> {
@@ -278,15 +326,18 @@ export async function listPatrolDirs(): Promise<string[]> {
   try {
     const info = await Paths.info(patrolsRoot.uri);
     if (!info.exists) {
+      console.log("[FileStorage] listPatrolDirs: heriguard/patrols/ not found");
       return [];
     }
 
     const items = patrolsRoot.list();
-    return items
+    const dirs = items
       .filter((item): item is Directory => item instanceof Directory)
       .map((dir) => dir.name)
       .sort()
       .reverse(); // Most recent first
+    console.log(`[FileStorage] listPatrolDirs: found ${dirs.length} dirs:`, dirs);
+    return dirs;
   } catch (error) {
     console.warn("listPatrolDirs failed:", error);
     return [];
@@ -306,11 +357,14 @@ export async function loadPersistedPatrols(): Promise<PatrolSession[]> {
       const manifest = await readPatrolJson(patrolId);
       if (manifest) {
         patrols.push(manifest);
+      } else {
+        console.warn(`[FileStorage] readPatrolJson returned null for ${patrolId}`);
       }
     } catch (error) {
       console.warn(`Failed to load patrol ${patrolId}:`, error);
     }
   }
 
+  console.log(`[FileStorage] loadPersistedPatrols: loaded ${patrols.length} patrols`);
   return patrols;
 }

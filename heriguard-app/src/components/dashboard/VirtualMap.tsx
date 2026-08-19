@@ -1,45 +1,31 @@
-import { useState } from "react";
 import { View, Text, Image, TouchableOpacity, StyleSheet } from "react-native";
+import { useRouter } from "expo-router";
 import { PlaqueCard } from "@/components/shared/PlaqueCard";
 import { usePatrolStore } from "@/store/patrolStore";
+import { CAPTURE_POINTS } from "@/constants/capturePoints";
 import { Colors, Font } from "@/constants/theme";
 import type { MapMarker } from "@/types/robot";
 
 const guardMap = require("../../../assets/images/guard.png");
 
-function markerTooltip(marker: MapMarker): string[] {
-  const issues: string[] = [];
-  if (marker.hasCrackLarge) issues.push("Nứt lớn");
-  if (marker.hasCrackSmall) issues.push("Nứt nhỏ");
-  if (marker.hasMoss) issues.push("Rêu");
-  if (marker.hasMold) issues.push("Mốc");
-  if (marker.hasStain) issues.push("Ố màu");
-  if (marker.hasLowIssue) issues.push("Vấn đề nhẹ");
-  if (marker.hasHighIssue) issues.push("Vấn đề nghiêm trọng");
-  return issues.length > 0 ? issues : ["An toàn"];
-}
-
 const DOT_SIZE = 16;
 const HALF_DOT = DOT_SIZE / 2;
 
+// Bản đồ: hiển thị 2 điểm chụp cố định
+const MAX_DIST = Math.max(5, ...CAPTURE_POINTS.map((p) => p.nodeX2));
+
+function distToLeftPct(distanceX2: number): `${number}%` {
+  return `${Math.min(92, Math.max(8, (distanceX2 / MAX_DIST) * 100))}%`;
+}
+
 export function VirtualMap() {
-  const currentMapMarkers = usePatrolStore((s) => s.currentMapMarkers);
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const router = useRouter();
+  const patrols = usePatrolStore((s) => s.patrols);
 
-  if (currentMapMarkers.length === 0) {
-    return (
-      <PlaqueCard label="Bản đồ mô phỏng">
-        <Text style={styles.empty}>Chưa có dữ liệu tuần tra</Text>
-      </PlaqueCard>
-    );
-  }
-
-  // Một marker cho mỗi điểm dừng của robot — giữ marker mới nhất nếu cùng vị trí
-  const markers: MapMarker[] = [...currentMapMarkers].reverse().filter(
-    (m, i, arr) => arr.findIndex((x) => x.distanceX2 === m.distanceX2) === i
-  );
-
-  const maxDist = Math.max(...markers.map((m) => m.distanceX2), 1);
+  // Lấy marker từ lần tuần tra gần nhất cho điểm chụp
+  const latestPatrol = patrols.length > 0 ? patrols[0] : null;
+  const markerForPoint = (nodeX2: number): MapMarker | null =>
+    latestPatrol?.mapMarkers.find((m) => m.distanceX2 === nodeX2) ?? null;
 
   return (
     <PlaqueCard label="Bản đồ mô phỏng">
@@ -52,62 +38,48 @@ export function VirtualMap() {
         {/* Đường tuần tra */}
         <View style={styles.path} />
 
-        {/* Điểm dừng của robot */}
-        {markers.map((marker) => {
-          const leftPct = Math.min(
-            92,
-            Math.max(8, (marker.distanceX2 / maxDist) * 100)
-          );
-          const isSelected = selectedIdx === marker.distanceX2;
+        {/* 2 ĐIỂM CHỤP cố định — điểm dừng duy nhất */}
+        {CAPTURE_POINTS.map((point) => {
+          const marker = markerForPoint(point.nodeX2);
+          const confidence = marker ? marker.confidence : 0;
           return (
             <TouchableOpacity
-              key={marker.distanceX2}
-              style={[styles.marker, { left: `${leftPct}%` }]}
-              onPress={() => setSelectedIdx(isSelected ? null : marker.distanceX2)}
+              key={`point-${point.id}`}
+              style={[
+                styles.marker,
+                { left: distToLeftPct(point.nodeX2) },
+              ]}
+              onPress={() =>
+                router.push({ pathname: "/capture-point/[id]", params: { id: point.id } })
+              }
               activeOpacity={0.6}
             >
-              <Text style={styles.distLabel}>
-                {(marker.distanceX2 * 0.5).toFixed(1)}m
-              </Text>
-              <View style={styles.dot}>
-                {marker.confidence > 0 && (
-                  <Text style={styles.confBadge}>{marker.confidence}%</Text>
+              <Text style={styles.distLabel}>{point.distanceLabel}</Text>
+              <View
+                style={[
+                  styles.pointDot,
+                  !marker && styles.pointDotEmpty,
+                ]}
+              >
+                {confidence > 0 && (
+                  <Text style={styles.confBadge}>{confidence}%</Text>
                 )}
               </View>
-              {isSelected && (
-                <View style={[styles.tooltip, { borderColor: Colors.lacquer }]}>
-                  {markerTooltip(marker).map((t, j) => (
-                    <Text key={j} style={styles.tooltipText}>{t}</Text>
-                  ))}
-                  <Text style={styles.tooltipSub}>
-                    {marker.temperature.toFixed(1)}°C / {marker.humidity.toFixed(1)}%
-                  </Text>
-                </View>
-              )}
+              <Text style={styles.pointTag}>ĐC{point.id}</Text>
             </TouchableOpacity>
           );
         })}
       </View>
 
       <View style={styles.legend}>
-        <View style={styles.legendDot} />
-        <Text style={styles.legendText}>
-          Điểm robot dừng ({markers.length}) — chạm để xem chi tiết
-        </Text>
+        <View style={[styles.legendDot, { backgroundColor: Colors.gold }]} />
+        <Text style={styles.legendText}>Điểm chụp — điểm dừng cố định (chạm để xem)</Text>
       </View>
     </PlaqueCard>
   );
 }
 
 const styles = StyleSheet.create({
-  empty: {
-    fontFamily: Font.regular,
-    fontSize: 12,
-    color: Colors.inkSoft,
-    fontStyle: "italic",
-    textAlign: "center",
-    paddingVertical: 16,
-  },
   mapArea: {
     height: 190,
     borderRadius: 4,
@@ -139,11 +111,11 @@ const styles = StyleSheet.create({
     transform: [{ translateX: -HALF_DOT }, { translateY: -13 }],
     zIndex: 2,
   },
-  dot: {
+  pointDot: {
     width: DOT_SIZE,
     height: DOT_SIZE,
     borderRadius: DOT_SIZE / 2,
-    backgroundColor: Colors.lacquer,
+    backgroundColor: Colors.gold,
     borderWidth: 2,
     borderColor: Colors.paper,
     alignItems: "center",
@@ -153,6 +125,18 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     shadowOffset: { width: 0, height: 1 },
     elevation: 3,
+  },
+  pointDotEmpty: {
+    backgroundColor: Colors.goldLight,
+    borderColor: Colors.gold,
+    borderWidth: 2,
+  },
+  pointTag: {
+    fontFamily: Font.bold,
+    fontSize: 8,
+    color: Colors.gold,
+    marginTop: 2,
+    letterSpacing: 0.3,
   },
   confBadge: {
     fontFamily: Font.bold,
@@ -165,32 +149,6 @@ const styles = StyleSheet.create({
     color: Colors.inkSoft,
     marginBottom: 1,
   },
-  tooltip: {
-    position: "absolute",
-    bottom: 30,
-    backgroundColor: Colors.paper,
-    borderWidth: 1,
-    borderRadius: 4,
-    padding: 6,
-    minWidth: 84,
-    alignItems: "center",
-    zIndex: 10,
-    shadowColor: Colors.ink,
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  tooltipText: {
-    fontFamily: Font.bold,
-    fontSize: 10,
-    color: Colors.ink,
-  },
-  tooltipSub: {
-    fontFamily: Font.regular,
-    fontSize: 9,
-    color: Colors.inkSoft,
-    marginTop: 2,
-  },
   legend: {
     flexDirection: "row",
     alignItems: "center",
@@ -201,7 +159,6 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: Colors.lacquer,
   },
   legendText: {
     fontFamily: Font.regular,

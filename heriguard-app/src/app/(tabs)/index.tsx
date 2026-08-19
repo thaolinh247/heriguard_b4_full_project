@@ -7,7 +7,6 @@ import { TrendSummary } from "@/components/dashboard/TrendSummary";
 import { StateIndicator } from "@/components/dashboard/StateIndicator";
 import { ControlPanel } from "@/components/dashboard/ControlPanel";
 import { VirtualMap } from "@/components/dashboard/VirtualMap";
-import { startMockBle, stopMockBle } from "@/lib/mockBle";
 import { tryReconnectLastDevice } from "@/lib/ble";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { useDeviceStore } from "@/store/deviceStore";
@@ -17,7 +16,6 @@ import { Colors, Font } from "@/constants/theme";
 const logo = require("../../../assets/images/novaculture.png");
 
 export default function HomeScreen() {
-  const mockMode = useSettingsStore((s) => s.mockMode);
   const bleConnected = useDashboardStore((s) => s.bleConnected);
   const lastUpdate = useDashboardStore((s) => s.lastUpdate);
   const stationId = useSettingsStore((s) => s.stationId);
@@ -25,15 +23,10 @@ export default function HomeScreen() {
   const deviceName = useDeviceStore((s) => s.deviceName);
 
   useEffect(() => {
-    if (mockMode) {
-      startMockBle();
-      return () => stopMockBle();
-    }
-    // Chưa bật mock → thử kết nối lại robot đã ghép lần trước
     tryReconnectLastDevice().then((ok) => {
       if (!ok) useDashboardStore.getState().setBleConnected(false);
     });
-  }, [mockMode]);
+  }, []);
 
   const connText =
     connectionStatus === "connected"

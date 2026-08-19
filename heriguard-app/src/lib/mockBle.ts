@@ -28,7 +28,7 @@ function getMockPreviewUri(nodeX2: number): string {
 }
 
 function generateMockMapMarker(distX2: number): MapMarker {
-  const hasIssue = distX2 >= 3 && Math.random() > 0.4; // Issues from node 3 onwards
+  const hasIssue = distX2 >= 2 && Math.random() > 0.4; // Issues from node 2 onwards
   const issueType = Math.floor(Math.random() * 6);
   let flags = 0;
   if (hasIssue) {
@@ -61,8 +61,8 @@ function generateMockDetectionForNode(
   humidity: number,
   patrolCount: number
 ): NodeImage["detection"] | null {
-  if (nodeX2 < 3) {
-    return null; // No detections for nodes 0-2
+  if (nodeX2 < 2) {
+    return null; // No detections for nodes 0-1
   }
 
   // Demo: growing trend — area increases with patrol count
@@ -312,6 +312,26 @@ async function runMockStaticCapture(nodeX2: number, temp: number, humidity: numb
       : undefined,
   });
 
+  // Thêm marker lên bản đồ mô phỏng để thấy vị trí chụp
+  const marker: MapMarker = {
+    distanceX2: nodeX2,
+    flags: outcome.nodeImage?.detection ? 0x20 : 0,
+    hasLowIssue: false,
+    hasHighIssue: false,
+    hasMoss: false,
+    hasMold: false,
+    hasStain: false,
+    hasCrackSmall: !!outcome.nodeImage?.detection,
+    hasCrackLarge: false,
+    confidence: outcome.nodeImage?.detection
+      ? Math.round(outcome.nodeImage.detection.confidence * 100)
+      : 0,
+    temperature: temp,
+    humidity,
+    timestamp: nodeX2 * 180,
+  };
+  usePatrolStore.getState().addMarker(marker);
+
   if (outcome.reason === "clean") {
     console.log(`[MockBLE] 'N' node ${nodeX2}: sạch — không lưu (chỉ xem)`);
   }
@@ -357,6 +377,19 @@ export function mockSendCommand(cmd: string): boolean {
       runMockStaticCapture(nodeX2, temp, humidity).catch((error) =>
         console.warn("[MockBLE] static capture failed:", error)
       );
+      return true;
+    }
+    case "F":
+    case "G":
+    case "T":
+    case "W": {
+      const labels: Record<string, string> = {
+        F: "RC4 Pan",
+        G: "RC3 Fold",
+        T: "RC2 Tilt",
+        W: "RC1 Twist",
+      };
+      console.log(`[MockBLE] Servo ${labels[cmd] ?? cmd} step received (mock)`);
       return true;
     }
     default:

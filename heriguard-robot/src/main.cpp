@@ -26,11 +26,11 @@ BLECharacteristic charMapData(CHAR_MAP_DATA_UUID,  BLERead | BLENotify, 9);
 enum RobotState {
   IDLE = 0,
   PATROL_MOVE = 1,
-  INSPECT_A = 2,
-  INSPECT_B = 3,
-  INSPECT_C = 4,
-  INSPECT_D = 5,
-  INSPECT_E = 6,
+  // INSPECT_A = 2,
+  // INSPECT_B = 3,
+  // INSPECT_C = 4,
+  // INSPECT_D = 5,
+  // INSPECT_E = 6,
   EMERGENCY = 7,
 };
 
@@ -85,8 +85,10 @@ constexpr uint8_t CUSTOM_JUNCTION_ACTIVE_THRESHOLD = 45;
 constexpr uint8_t ZONE_FOLLOW_ACTIVE_THRESHOLD = 18;
 constexpr uint8_t LINE_LOST_CONFIRM_FRAMES = 3;
 constexpr uint32_t LINE_LOST_EMERGENCY_MS = 3000;  // mất line > 3s → EMERGENCY
-constexpr uint16_t SERVO_HOME_ANGLE = 0;
-constexpr uint16_t SERVO_4_HOME_ANGLE = 90;
+constexpr uint16_t SERVO_HOME_ANGLE = 90;     // RC1 (xoay trục): 90
+constexpr uint16_t SERVO_2_HOME_ANGLE = 0;    // RC2 (nâng cam): 0
+constexpr uint16_t SERVO_3_HOME_ANGLE = 90;   // RC3 (gập cam): 90
+constexpr uint16_t SERVO_4_HOME_ANGLE = 90;   // RC4 (ngang): 90
 constexpr uint16_t BUZZER_LEFT_FREQUENCY = 700;
 constexpr uint16_t BUZZER_RIGHT_FREQUENCY = 1000;
 constexpr uint32_t BUZZER_JUNCTION_DURATION_MS = 35;
@@ -141,17 +143,15 @@ unsigned long gLineLostSinceMs = 0;
 // ── Laser ──────────────────────────────────────────────
 #define OBSTACLE_THRESHOLD_MM 200
 
-// ── Servo angles (RC1: pan, RC2: fold, RC3: tilt, RC4: twist) ──
-#define SERVO_PAN_L     45    // RC1: Pan trái
-#define SERVO_PAN_C     90    // RC1: Pan giữa (home)
-#define SERVO_PAN_R     135   // RC1: Pan phải
-#define SERVO_FOLD      0     // RC2: Gập cam (home)
-#define SERVO_TILT_LOW  45    // RC3: Hạ cam (scan low)
-#define SERVO_TILT_HIGH 135   // RC3: Nâng cam (scan high)
-#define SERVO_TILT_HOME 90    // RC3: Home
-#define SERVO_TWIST_LOW 0     // RC4: Góc thấp
-#define SERVO_TWIST_HIGH 180  // RC4: Góc cao
-#define SERVO_TWIST_HOME 90   // RC4: Home
+// ── Servo angles (RC4: ngang/pan, RC3: gập cam/fold, RC2: nâng cam/tilt, RC1: xoay trục/twist) ──
+#define SERVO_PAN_HOME  90    // RC4: Pan giữa (home)
+#define SERVO_PAN_L     45    // RC4: Pan trái
+#define SERVO_PAN_R     135   // RC4: Pan phải
+#define SERVO_FOLD_HOME 90    // RC3: Gập cam (home)
+#define SERVO_TILT_HOME 0     // RC2: Nâng cam (home)
+#define SERVO_TILT_LOW  45    // RC2: Hạ cam
+#define SERVO_TILT_HIGH 135   // RC2: Nâng cam
+#define SERVO_TWIST_HOME 90   // RC1: xoay trục (home)
 
 // ── Virtual Map ────────────────────────────────────────
 struct MapMarker {
@@ -209,13 +209,13 @@ void onBLEDisconnected(BLEDevice central);
 void onCommandWritten(BLEDevice central, BLECharacteristic characteristic);
 void runStateMachine();
 void patrolMove();
-void inspectWide();
-void inspectRetract();
-void inspectCloseApproach();
-void inspectScanLow();
-void inspectScanHigh();
-bool readDetectionFromCam();
-void sendDetectionViaBle();
+// void inspectWide();
+// void inspectRetract();
+// void inspectCloseApproach();
+// void inspectScanLow();
+// void inspectScanHigh();
+// bool readDetectionFromCam();
+// void sendDetectionViaBle();
 void sendMapMarker(uint8_t distX2, uint8_t flags, uint8_t conf);
 bool checkObstacle();
 void initRobot();
@@ -746,25 +746,58 @@ void setRcAngle(uint8_t id, uint16_t angle) {
   }
 }
 
+// ── Servo current angles (for relative D-pad control) ──
+uint16_t servoPanAngle   = SERVO_PAN_HOME;    // RC4
+uint16_t servoFoldAngle  = SERVO_FOLD_HOME;   // RC3
+uint16_t servoTiltAngle  = SERVO_TILT_HOME;   // RC2
+uint16_t servoTwistAngle = SERVO_TWIST_HOME;  // RC1
+
+const uint16_t SERVO_STEP = 15;  // degrees per D-pad tap
+const uint16_t SERVO_MIN  = 0;
+const uint16_t SERVO_MAX  = 180;
+
+uint16_t clampServo(uint16_t angle) {
+  if (angle < SERVO_MIN) return SERVO_MIN;
+  if (angle > SERVO_MAX) return SERVO_MAX;
+  return angle;
+}
+
 // Init KHÔNG dùng step-state vì chưa có encoder servo — gọi setRcAngle
 // trực tiếp (blocking PWM) + delay cho servo về vị trí physical.
 void initServosToHome() {
-  setRcAngle(1, SERVO_PAN_C);
-  setRcAngle(2, SERVO_FOLD);
-  setRcAngle(3, SERVO_TILT_HOME);
-  setRcAngle(4, SERVO_TWIST_HOME);
+  MiniR4.RC4.setHWDir(true);
+  MiniR4.RC3.setHWDir(true);
+  MiniR4.RC2.setHWDir(false);
+  MiniR4.RC1.setHWDir(true);
+
+  setRcAngle(4, SERVO_PAN_HOME);
+  setRcAngle(3, SERVO_FOLD_HOME);
+  setRcAngle(2, SERVO_TILT_HOME);
+  setRcAngle(1, SERVO_TWIST_HOME);
+
+  servoPanAngle   = SERVO_PAN_HOME;
+  servoFoldAngle  = SERVO_FOLD_HOME;
+  servoTiltAngle  = SERVO_TILT_HOME;
+  servoTwistAngle = SERVO_TWIST_HOME;
+
   delay(400);
 }
 
 void servoHome() {
-  setRcAngle(1, SERVO_PAN_C);
-  setRcAngle(2, SERVO_FOLD);
-  setRcAngle(3, SERVO_TILT_HOME);
-  setRcAngle(4, SERVO_TWIST_HOME);
+  setRcAngle(4, SERVO_PAN_HOME);
+  setRcAngle(3, SERVO_FOLD_HOME);
+  setRcAngle(2, SERVO_TILT_HOME);
+  setRcAngle(1, SERVO_TWIST_HOME);
+
+  servoPanAngle   = SERVO_PAN_HOME;
+  servoFoldAngle  = SERVO_FOLD_HOME;
+  servoTiltAngle  = SERVO_TILT_HOME;
+  servoTwistAngle = SERVO_TWIST_HOME;
 }
 
 void servoPan(uint8_t angle) {
-  setRcAngle(1, angle);
+  setRcAngle(4, angle);
+  servoPanAngle = angle;
   delay(300);  // Chờ servo tới vị trí
 }
 
@@ -835,21 +868,21 @@ void runStateMachine() {
     case PATROL_MOVE:
       patrolMove();
       break;
-    case INSPECT_A:
-      inspectWide();
-      break;
-    case INSPECT_B:
-      inspectCloseApproach();
-      break;
-    case INSPECT_C:
-      inspectScanLow();
-      break;
-    case INSPECT_D:
-      inspectScanHigh();
-      break;
-    case INSPECT_E:
-      inspectRetract();
-      break;
+    // case INSPECT_A:
+    //   inspectWide();
+    //   break;
+    // case INSPECT_B:
+    //   inspectCloseApproach();
+    //   break;
+    // case INSPECT_C:
+    //   inspectScanLow();
+    //   break;
+    // case INSPECT_D:
+    //   inspectScanHigh();
+    //   break;
+    // case INSPECT_E:
+    //   inspectRetract();
+    //   break;
     default:
       break;
   }
@@ -870,63 +903,49 @@ void patrolMove() {
     MiniR4.M4.resetCounter();
     resetPid();
     resetFollowRuntime();
-    robotState = INSPECT_A;
-    Serial.print("Reached 0.5m, inspecting. dist=");
+    // robotState = INSPECT_A;  // DISABLED
+    Serial.print("Reached 0.5m. dist=");
     Serial.println(markerDistanceCount);
+    markerDistanceCount++;
   }
 }
 
+// ── INSPECT functions (DISABLED) ──────────────────────
+/*
 void inspectWide() {
-  // Read DHT at inspection point
   readSensor();
-
-  // Send sensor data
   if (bleConnected) {
     sendSensor();
   }
-
   uint8_t flags = 0;
   uint8_t confidence = 0;
   bool hasIssue = false;
-
   if (bleConnected) {
-    // Auto-capture baseline wide shot for this node
     camNodeX2 = markerDistanceCount;
-    camShotKind = 0;       // Wide (A)
-    camPan = SERVO_PAN_C;
+    camShotKind = 0;
+    camPan = SERVO_PAN_HOME;
     camTilt = SERVO_TILT_HOME;
     if (captureJpegFromCam()) {
       sendJpegViaBle();
     }
-
-    // Real Edge-AI detection on this node (từ camera, không phải random)
     if (readDetectionFromCam()) {
       hasIssue = true;
       for (uint8_t i = 0; i < camDetCount; i++) {
         const CamDetection &d = camDets[i];
         if (d.confidence > confidence) confidence = d.confidence;
         switch (d.label) {
-          case 0: flags |= 0x20; break;                     // crack_small
-          case 1: flags |= 0x40; break;                     // crack_large
-          case 2: flags |= 0x04; break;                     // moss
-          case 3: flags |= 0x08; break;                     // mold
-          case 4: flags |= 0x10; break;                     // stain
+          case 0: flags |= 0x20; break;
+          case 1: flags |= 0x40; break;
+          case 2: flags |= 0x04; break;
+          case 3: flags |= 0x08; break;
+          case 4: flags |= 0x10; break;
         }
       }
       sendDetectionViaBle();
-      Serial.print("Issue detected by camera, flags=");
-      Serial.println(flags);
-    } else {
-      Serial.print("Node ");
-      Serial.print(markerDistanceCount * 0.5);
-      Serial.println("m: no issue (wide scan clean)");
     }
   }
-
   sendMapMarker(markerDistanceCount, flags, confidence);
   markerDistanceCount++;
-
-  // Có nghi ngờ → INSPECT_B (close scan); sạch → retract rồi đi tiếp
   if (hasIssue) {
     robotState = INSPECT_B;
     return;
@@ -935,15 +954,86 @@ void inspectWide() {
 }
 
 void inspectRetract() {
-  // Reset camera position (servo placeholder)
-  setRcAngle(1, SERVO_PAN_C);
-  setRcAngle(2, SERVO_FOLD);
-  setRcAngle(3, SERVO_TILT_HOME);
-  setRcAngle(4, SERVO_TWIST_HOME);
-
+  setRcAngle(4, SERVO_PAN_HOME);
+  setRcAngle(3, SERVO_FOLD_HOME);
+  setRcAngle(2, SERVO_TILT_HOME);
+  setRcAngle(1, SERVO_TWIST_HOME);
   delay(100);
   robotState = PATROL_MOVE;
 }
+
+void inspectCloseApproach() {
+  const uint16_t dist = MiniR4.I2C1.MXLaserV2.getDistance();
+  if (dist > 250 && dist <= 1999) {
+    followLineUntilLaserBelow(FollowPidMode::RightEdge, 200, 5000, 2);
+  }
+  stopRobot();
+  uint8_t sensors[10] = {0};
+  if (readLineSensors(sensors)) {
+    const float err = computeZoneFollowError(sensors, 1, 6, 3.5f);
+    if (fabsf(err) > 1.0f) {
+      const int correction = constrain((int)(err * 15), -30, 30);
+      setTankRaw(constrain(-correction, -30, 30), constrain(correction, -30, 30));
+      delay(200);
+      stopRobot();
+    }
+  }
+  if (bleConnected) {
+    camNodeX2 = markerDistanceCount > 0 ? markerDistanceCount - 1 : 0;
+    camShotKind = 3;
+    camPan = SERVO_PAN_HOME;
+    camTilt = SERVO_TILT_LOW;
+    if (captureJpegFromCam()) {
+      sendJpegViaBle();
+    }
+  }
+  robotState = INSPECT_C;
+}
+
+void inspectScanLow() {
+  setRcAngle(2, SERVO_TILT_LOW);
+  delay(500);
+  uint8_t positions[] = {SERVO_PAN_L, SERVO_PAN_HOME, SERVO_PAN_R};
+  for (int i = 0; i < 3; i++) {
+    servoPan(positions[i]);
+    if (bleConnected) {
+      camNodeX2 = markerDistanceCount > 0 ? markerDistanceCount - 1 : 0;
+      camShotKind = 1;
+      camPan = positions[i];
+      camTilt = SERVO_TILT_LOW;
+      if (captureJpegFromCam()) {
+        sendJpegViaBle();
+      }
+      if (readDetectionFromCam()) {
+        sendDetectionViaBle();
+      }
+    }
+  }
+  robotState = INSPECT_D;
+}
+
+void inspectScanHigh() {
+  setRcAngle(2, SERVO_TILT_HIGH);
+  delay(500);
+  uint8_t positions[] = {SERVO_PAN_L, SERVO_PAN_HOME, SERVO_PAN_R};
+  for (int i = 0; i < 3; i++) {
+    servoPan(positions[i]);
+    if (bleConnected) {
+      camNodeX2 = markerDistanceCount > 0 ? markerDistanceCount - 1 : 0;
+      camShotKind = 2;
+      camPan = positions[i];
+      camTilt = SERVO_TILT_HIGH;
+      if (captureJpegFromCam()) {
+        sendJpegViaBle();
+      }
+      if (readDetectionFromCam()) {
+        sendDetectionViaBle();
+      }
+    }
+  }
+  robotState = INSPECT_E;
+}
+*/
 
 // ── Virtual Map ────────────────────────────────────────
 void sendMapMarker(uint8_t distX2, uint8_t flags, uint8_t conf) {
@@ -1064,8 +1154,18 @@ void sendStatus() {
 }
 
 // ── Camera JPEG Capture ─────────────────────────────────
+// Minimal gap between captures so camera firmware can reset its frame buffer
+static unsigned long lastCaptureMs = 0;
+static const unsigned long CAPTURE_COOLDOWN_MS = 300;
+
 bool captureJpegFromCam() {
   if (!bleConnected) return false;
+
+  // Cooldown: camera cần ≥300ms giữa 2 lần chụp để reset buffer
+  unsigned long now = millis();
+  if (now - lastCaptureMs < CAPTURE_COOLDOWN_MS) {
+    delay(CAPTURE_COOLDOWN_MS - (now - lastCaptureMs));
+  }
 
   // Dọn byte rác còn sót trong buffer (banner "CAM READY" hoặc frame cũ)
   while (Serial1.available()) {
@@ -1133,6 +1233,7 @@ bool captureJpegFromCam() {
       }
 
       jpegLen = length;
+      lastCaptureMs = millis();
       Serial.print("JPEG: captured ");
       Serial.print(length);
       Serial.println(" bytes");
@@ -1219,14 +1320,27 @@ void handleCommand(uint8_t* buf, int len) {
       Serial.println("Cmd: STATIC CAPTURE (AI on app)");
       setLedColor(200, 200, 0);
       readSensor();
-      if (bleConnected) sendSensor();
+      if (bleConnected) {
+        sendSensor();
+        Serial.print("STATIC: sent sensor (T=");
+        Serial.print(temperature, 1);
+        Serial.print(" H=");
+        Serial.print(humidity);
+        Serial.print(" node=");
+        Serial.print(markerDistanceCount);
+        Serial.println(")");
+      }
       {
         camNodeX2 = markerDistanceCount;
         camShotKind = 0;       // wide
-        camPan = SERVO_PAN_C;
+        camPan = SERVO_PAN_HOME;
         camTilt = SERVO_TILT_HOME;
         bool ok = captureJpegFromCam();
-        if (ok) sendJpegViaBle();
+        if (ok) {
+          sendJpegViaBle();
+        } else {
+          Serial.println("STATIC: JPEG capture failed — check camera UART");
+        }
         setLedColor(ok ? 0 : 200, 200, 0);
         delay(150);
         setLedColor(0, 200, 0);
@@ -1236,27 +1350,56 @@ void handleCommand(uint8_t* buf, int len) {
 
     case 'P':
       Serial.println("Cmd: START PATROL");
-      if (!patrolActive) {
-        patrolActive = true;
-        robotState = PATROL_MOVE;
-        markerDistanceCount = 0;
-        patrolStartTime = millis();
-        MiniR4.M3.resetCounter();
-        MiniR4.M4.resetCounter();
-        resetPid();
-        resetFollowRuntime();
-        gLastLoopMs = millis();
-        servoHome();
-        if (bleConnected) sendStatus();
-      }
+      patrolActive = true;
+      robotState = PATROL_MOVE;
+      markerDistanceCount = 0;
+      patrolStartTime = millis();
+      MiniR4.M3.resetCounter();
+      MiniR4.M4.resetCounter();
+      resetPid();
+      resetFollowRuntime();
+      gLastLoopMs = millis();
+      servoHome();
+      if (bleConnected) sendStatus();
       break;
 
     case 'X':
-      Serial.println("Cmd: STOP");
+      Serial.println("Cmd: STOP (pause)");
       stopRobot();
-      patrolActive = false;
       robotState = IDLE;
+      // patrolActive giữ nguyên → state machine vẫn chạy (IDLE = idle),
+      // N (capture) hoạt động bình thường. P sẽ resume patrol.
       if (bleConnected) sendStatus();
+      break;
+
+    // ── Servo D-pad commands ──
+    // Protocol: cmd_char + step(int8, signed). Servo moves by step degrees.
+    // 'F' = RC4 pan (ngang), 'G' = RC3 fold (gập cam),
+    // 'T' = RC2 tilt (nâng cam), 'W' = RC1 twist (xoay trục)
+    case 'F':
+    case 'G':
+    case 'T':
+    case 'W':
+      if (len >= 2) {
+        int8_t step = (int8_t)buf[1];
+        uint16_t *anglePtr = nullptr;
+        uint8_t rcId = 0;
+        switch (cmd) {
+          case 'F': anglePtr = &servoPanAngle;   rcId = 4; break;
+          case 'G': anglePtr = &servoFoldAngle;  rcId = 3; break;
+          case 'T': anglePtr = &servoTiltAngle;  rcId = 2; break;
+          case 'W': anglePtr = &servoTwistAngle; rcId = 1; break;
+        }
+        if (anglePtr && rcId) {
+          int newAngle = (int)*anglePtr + step;
+          *anglePtr = clampServo(newAngle);
+          setRcAngle(rcId, *anglePtr);
+          Serial.print("Servo RC");
+          Serial.print(rcId);
+          Serial.print(" -> ");
+          Serial.println(*anglePtr);
+        }
+      }
       break;
 
     default:
@@ -1266,20 +1409,14 @@ void handleCommand(uint8_t* buf, int len) {
   }
 }
 
-// ── INSPECT_B: Close Approach ──────────────────────────
-// Laser đo khoảng → bám line tiến tới 15-20cm → chụp ảnh cận cảnh
+// ── INSPECT_B/C/D/E functions (DISABLED) ──────────────
+/*
 void inspectCloseApproach() {
   const uint16_t dist = MiniR4.I2C1.MXLaserV2.getDistance();
-  Serial.print("Close approach: dist=");
-  Serial.println(dist);
-
-  // Bám line tiến đến cách tường 15-20cm (PID B3 + laser threshold 200mm)
   if (dist > 250 && dist <= 1999) {
     followLineUntilLaserBelow(FollowPidMode::RightEdge, 200, 5000, 2);
   }
   stopRobot();
-
-  // Căn lại line ngắn sau khi tiến (nếu lệch)
   uint8_t sensors[10] = {0};
   if (readLineSensors(sensors)) {
     const float err = computeZoneFollowError(sensors, 1, 6, 3.5f);
@@ -1290,12 +1427,10 @@ void inspectCloseApproach() {
       stopRobot();
     }
   }
-
-  // Chụp ảnh cận cảnh (shotKind 3 = manual close-up)
   if (bleConnected) {
     camNodeX2 = markerDistanceCount > 0 ? markerDistanceCount - 1 : 0;
     camShotKind = 3;
-    camPan = SERVO_PAN_C;
+    camPan = SERVO_PAN_HOME;
     camTilt = SERVO_TILT_LOW;
     if (captureJpegFromCam()) {
       sendJpegViaBle();
@@ -1304,20 +1439,15 @@ void inspectCloseApproach() {
   robotState = INSPECT_C;
 }
 
-// ── INSPECT_C: Scan Low ────────────────────────────────
-// RC3 hạ cam, RC4 góc thấp, RC1 pan 3 vị trí
 void inspectScanLow() {
-  setRcAngle(3, SERVO_TILT_LOW);    // Hạ cam
-  setRcAngle(4, SERVO_TWIST_LOW);   // Góc thấp
+  setRcAngle(2, SERVO_TILT_LOW);
   delay(500);
-
-  // Pan: trái → giữa → phải
-  uint8_t positions[] = {SERVO_PAN_L, SERVO_PAN_C, SERVO_PAN_R};
+  uint8_t positions[] = {SERVO_PAN_L, SERVO_PAN_HOME, SERVO_PAN_R};
   for (int i = 0; i < 3; i++) {
     servoPan(positions[i]);
     if (bleConnected) {
       camNodeX2 = markerDistanceCount > 0 ? markerDistanceCount - 1 : 0;
-      camShotKind = 1; // close low
+      camShotKind = 1;
       camPan = positions[i];
       camTilt = SERVO_TILT_LOW;
       if (captureJpegFromCam()) {
@@ -1328,24 +1458,18 @@ void inspectScanLow() {
       }
     }
   }
-
   robotState = INSPECT_D;
 }
 
-// ── INSPECT_D: Scan High ───────────────────────────────
-// RC3 nâng cam, RC4 góc cao, RC1 pan 3 vị trí
 void inspectScanHigh() {
-  setRcAngle(3, SERVO_TILT_HIGH);   // Nâng cam
-  setRcAngle(4, SERVO_TWIST_HIGH);  // Góc cao
+  setRcAngle(2, SERVO_TILT_HIGH);
   delay(500);
-
-  // Pan: trái → giữa → phải
-  uint8_t positions[] = {SERVO_PAN_L, SERVO_PAN_C, SERVO_PAN_R};
+  uint8_t positions[] = {SERVO_PAN_L, SERVO_PAN_HOME, SERVO_PAN_R};
   for (int i = 0; i < 3; i++) {
     servoPan(positions[i]);
     if (bleConnected) {
       camNodeX2 = markerDistanceCount > 0 ? markerDistanceCount - 1 : 0;
-      camShotKind = 2; // close high
+      camShotKind = 2;
       camPan = positions[i];
       camTilt = SERVO_TILT_HIGH;
       if (captureJpegFromCam()) {
@@ -1356,26 +1480,18 @@ void inspectScanHigh() {
       }
     }
   }
-
   robotState = INSPECT_E;
 }
+*/
 
-// ── Camera AI Detection (từ camera 'D', không phải random) ──
-// Camera gửi: 0xDD + count + N x [x,y,w,h,label,confidence] (6 bytes mỗi blob)
+// ── Camera AI Detection + Send Detection (DISABLED — only used by INSPECT) ──
+/*
 bool readDetectionFromCam() {
   if (!bleConnected) return false;
-
-  // Dọn buffer như captureJpegFromCam()
-  while (Serial1.available()) {
-    Serial1.read();
-  }
-
+  while (Serial1.available()) { Serial1.read(); }
   Serial1.write(CAM_DETECT);
-
   unsigned long start = millis();
   const unsigned long TIMEOUT = 3000;
-
-  // Đọc header: 0xDD + count
   uint8_t header[2];
   int read = 0;
   while (read < 2) {
@@ -1386,20 +1502,14 @@ bool readDetectionFromCam() {
       return false;
     }
   }
-
   if (header[0] != 0xDD) {
     Serial.print("DET: bad header 0x");
     Serial.println(header[0], HEX);
     return false;
   }
-
   uint8_t count = header[1];
-  if (count > MAX_DETECTIONS) {
-    count = MAX_DETECTIONS;
-  }
+  if (count > MAX_DETECTIONS) count = MAX_DETECTIONS;
   camDetCount = 0;
-
-  // Đọc từng detection: [x,y,w,h,label,confidence]
   for (uint8_t i = 0; i < count; i++) {
     uint8_t pkt[6];
     int pRead = 0;
@@ -1408,60 +1518,34 @@ bool readDetectionFromCam() {
         pkt[pRead++] = Serial1.read();
       } else if (millis() - start > TIMEOUT) {
         Serial.print("DET: packet timeout ");
-        Serial.print(i);
-        Serial.print("/");
-        Serial.println(count);
+        Serial.print(i); Serial.print("/"); Serial.println(count);
         return camDetCount > 0;
       }
     }
     CamDetection &d = camDets[camDetCount++];
-    d.x = pkt[0];
-    d.y = pkt[1];
-    d.w = pkt[2];
-    d.h = pkt[3];
-    d.label = pkt[4];
-    d.confidence = pkt[5];
+    d.x = pkt[0]; d.y = pkt[1]; d.w = pkt[2]; d.h = pkt[3];
+    d.label = pkt[4]; d.confidence = pkt[5];
   }
-
-  Serial.print("DET: ");
-  Serial.print(camDetCount);
-  Serial.println(" detections from camera");
+  Serial.print("DET: "); Serial.print(camDetCount); Serial.println(" detections from camera");
   return camDetCount > 0;
 }
 
-// ── Send Detection via BLE (12 bytes: label, confidence, nodeX2, shotKind, x, y, w, h, temp, hum) ──
 void sendDetectionViaBle() {
   if (!bleConnected || camDetCount == 0) return;
-
   for (uint8_t i = 0; i < camDetCount; i++) {
     const CamDetection &d = camDets[i];
     int16_t tH = (int16_t)(temperature * 100);
     uint16_t hH = (uint16_t)(humidity * 100);
     uint8_t data[12] = {
-      d.label,
-      d.confidence,
-      camNodeX2,
-      camShotKind,
-      d.x,
-      d.y,
-      d.w,
-      d.h,
-      (uint8_t)(tH & 0xFF),
-      (uint8_t)((tH >> 8) & 0xFF),
-      (uint8_t)(hH & 0xFF),
-      (uint8_t)((hH >> 8) & 0xFF)
+      d.label, d.confidence, camNodeX2, camShotKind,
+      d.x, d.y, d.w, d.h,
+      (uint8_t)(tH & 0xFF), (uint8_t)((tH >> 8) & 0xFF),
+      (uint8_t)(hH & 0xFF), (uint8_t)((hH >> 8) & 0xFF)
     };
     charDetection.writeValue(data, 12);
-    Serial.print("DET BLE: label=");
-    Serial.print(d.label);
-    Serial.print(" conf=");
-    Serial.print(d.confidence);
-    Serial.print(" node=");
-    Serial.print(camNodeX2);
-    Serial.print(" shot=");
-    Serial.println(camShotKind);
   }
 }
+*/
 
 // ── Display ────────────────────────────────────────────
 void updateDisplay() {

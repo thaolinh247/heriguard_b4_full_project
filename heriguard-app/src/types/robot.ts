@@ -82,15 +82,15 @@ export const ROBOT_STATE_LABELS: Record<RobotState, string> = {
   emergency: "Khẩn cấp",
 };
 
-export type PatrolCommand = "P" | "X" | "C" | "S";
+export type PatrolCommand = "P" | "X" | "C" | "N" | "S" | "F" | "G" | "T" | "W";
 
 // ── Shot kind (camera angle/distance) ──────────────────────────
 export type ShotKind = 0 | 1 | 2 | 3;
 export const SHOT_KIND_LABELS: Record<ShotKind, string> = {
-  0: "Wide (A)",
-  1: "Close Low (C)",
-  2: "Close High (D)",
-  3: "Manual",
+  0: "Ảnh rộng",
+  1: "Ảnh cận thấp",
+  2: "Ảnh cận cao",
+  3: "Tùy chỉnh",
 };
 
 // ── Phase 2A: Node Image (linked to patrol + node) ─────────────

@@ -55,7 +55,7 @@ export function TrendSummary() {
     <PlaqueCard label="Nhận định xu hướng" style={styles.card}>
       <TouchableOpacity
         activeOpacity={0.7}
-        onPress={() => router.push("/(tabs)/ai")}
+        onPress={() => router.push("/(tabs)/points")}
         style={styles.touchable}
       >
         <View style={styles.body}>

@@ -1,5 +1,5 @@
-import sensor, image, time, math
-from machine import UART
+import sensor, image, time, math  # type: ignore  — MicroPython (OpenMV)
+from machine import UART  # type: ignore  — MicroPython
 from struct import pack
 
 # UART: giao tiếp với Mini R4 (921600 baud)

@@ -15,7 +15,7 @@ interface SettingsState {
 }
 
 export const useSettingsStore = create<SettingsState>((set) => ({
-  mockMode: true,
+  mockMode: false,
   bleDeviceName: "HERI-GUARD-01",
   stationId: "#01",
   geminiApiKey: DEFAULT_GEMINI_API_KEY,

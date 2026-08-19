@@ -24,6 +24,7 @@ interface PatrolStore {
   // Actions
   importPatrols: (patrols: PatrolSession[]) => void;
   addCompletedPatrol: (session: PatrolSession) => void;
+  removePatrol: (id: string) => void;
   startPatrol: () => void;
   addMarker: (marker: MapMarker) => void;
   addSensorLog: (reading: SensorReading) => void;
@@ -56,6 +57,11 @@ export const usePatrolStore = create<PatrolStore>((set, get) => ({
       patrols: [session, ...state.patrols].sort((a, b) =>
         b.startTime.localeCompare(a.startTime)
       ),
+    })),
+
+  removePatrol: (id) =>
+    set((state) => ({
+      patrols: state.patrols.filter((p) => p.id !== id),
     })),
 
   startPatrol: () => {

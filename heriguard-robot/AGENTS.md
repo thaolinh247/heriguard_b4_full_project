@@ -25,10 +25,10 @@ Hệ thống Robot Tuần tra Tự hành HERI-GUARD
 | M4 | Motor phai | STM32 controlled | `MiniR4.M4.setSpeed(-100~100)` |
 | M1 | (reserved) | STM32 controlled | `MiniR4.M1` |
 | M2 | (reserved) | STM32 controlled | `MiniR4.M2` |
-| RC1 | Servo ngang | STM32 controlled | `MiniR4.RC1.setAngle(0~180)` |
-| RC2 | Servo gap cam | STM32 controlled | `MiniR4.RC2.setAngle(0~180)` |
-| RC3 | Servo nang cam | STM32 controlled | `MiniR4.RC3.setAngle(0~180)` |
-| RC4 | Servo xoay truc | STM32 controlled | `MiniR4.RC4.setAngle(0~180)` |
+| RC1 | Servo xoay truci | STM32 controlled | `MiniR4.RC1.setAngle(0~180)` |
+| RC2 | Servo nang cam | STM32 controlled | `MiniR4.RC2.setAngle(0~180)` |
+| RC3 | Servo gap cam | STM32 controlled | `MiniR4.RC3.setAngle(0~180)` |
+| RC4 | Servo ngang | STM32 controlled | `MiniR4.RC4.setAngle(0~180)` |
 | I2C1 | Laser V2 | MUX ch 0 | `MiniR4.I2C1.MXLaserV2.getDistance()` |
 | I2C2 | Line Tracer | MUX ch 1 | `MiniR4.I2C2.MXLineTracer.getError()` |
 | D1 | DHT MS-011 | D3 (digital) | `dht.readTemperature()` |
@@ -84,6 +84,18 @@ MiniR4.M3.ChkRotateEnd(isEnd);  // check rotation done
 MiniR4.RC1.begin();             // init servo
 MiniR4.RC1.setAngle(angle);     // 0-180 degrees
 MiniR4.RC1.setHWDir(true);      // hardware direction
+
+// Servo mapping:
+// RC1 = xoay truc (twist), setHWDir(true), home=90
+// RC2 = nang cam (tilt), setHWDir(false), home=0
+// RC3 = gap cam (fold), setHWDir(true), home=90
+// RC4 = ngang (pan), setHWDir(true), home=90
+
+// BLE commands for D-pad servo control:
+// 'F' + step(int8) = RC4 pan (ngang)
+// 'G' + step(int8) = RC3 fold (gap cam)
+// 'T' + step(int8) = RC2 tilt (nang cam)
+// 'W' + step(int8) = RC1 twist (xoay truc)
 ```
 
 ### Line Tracer V2 (I2C)

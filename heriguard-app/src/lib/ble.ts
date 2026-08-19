@@ -12,9 +12,15 @@ import {
   type NodeImage,
   type ShotKind,
   type DetectionEvent,
+  type DetectionInImage,
+  type ImageAnalysis,
 } from "@/types/robot";
-import { savePatrolImage } from "@/lib/fileStorage";
+import { savePatrolImageFromFile } from "@/lib/fileStorage";
 import { saveStaticCaptureFromUri } from "@/lib/staticCapture";
+import { analyzeCrackOnDevice } from "@/ml/crack";
+import { analyzeNodeImage } from "@/lib/analyze";
+import { useAlertStore } from "@/store/alertStore";
+import { useDetectionStore } from "@/store/detectionStore";
 
 const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
 const CHAR_CAMERA_DATA = "12345678-1234-5678-1234-56789abcdef1";
@@ -250,16 +256,24 @@ function bytesToBase64Chunked(bytes: number[]): string {
 }
 
 async function saveJpegBytes(jpegBytes: number[], frameId: number): Promise<string> {
+  if (jpegBytes.length === 0) {
+    throw new Error("saveJpegBytes: empty JPEG data");
+  }
+
+  // Validate JPEG magic bytes (0xFF 0xD8)
+  if (jpegBytes[0] !== 0xff || jpegBytes[1] !== 0xd8) {
+    throw new Error(
+      `saveJpegBytes: invalid JPEG header 0x${jpegBytes[0]?.toString(16) ?? "?"}${jpegBytes[1]?.toString(16) ?? "?"}`
+    );
+  }
+
   const root = new Directory(Paths.document, "heriguard", "camera", "frames");
-  // createDirectory("") sai API — create() với intermediates tạo đủ chuỗi
-  // heriguard/camera/frames, idempotent để gọi lại nhiều lần không lỗi
   root.create({ intermediates: true, idempotent: true });
   const name = `frame_${String(frameId).padStart(4, "0")}.jpg`;
   let file: File;
   try {
     file = root.createFile(name, "image/jpeg");
   } catch {
-    // frameId lặp lại (firmware reset) — xoá file cũ rồi tạo mới
     new File(root, name).delete();
     file = root.createFile(name, "image/jpeg");
   }
@@ -293,7 +307,6 @@ function handleCameraChunk(data: number[]) {
   const receivedCount = cameraChunks.filter((c) => c !== undefined).length;
   if (receivedCount === cameraExpectedChunks && cameraExpectedChunks > 0) {
     const jpegBytes = cameraChunks.flat();
-    const base64 = bytesToBase64Chunked(jpegBytes);
 
     // Get current patrol and environment data
     const patrolStore = usePatrolStore.getState();
@@ -305,9 +318,14 @@ function handleCameraChunk(data: number[]) {
     if (!currentPatrol) {
       // Lệnh 'N' (Chụp & Nhận diện): robot chỉ gửi ảnh. App chạy AI —
       // nếu đạt ngưỡng → lưu ảnh + nhiệt độ/độ ẩm tại node + phân tích.
+      // FIX: reset chunk buffer TRƯỚC khi save để lần chụp sau nhận đúng frame mới
+      cameraChunks = [];
+      cameraExpectedChunks = 0;
       const store = useDeviceStore.getState();
-      saveJpegBytes(jpegBytes, cameraFrameId)
-        .then(async (uri) => {
+      (async () => {
+        try {
+          const uri = await saveJpegBytes(jpegBytes, cameraFrameId);
+          console.log("[BLE] Static capture: JPEG saved to", uri);
           const outcome = await saveStaticCaptureFromUri(uri, nodeX2, temp, humidity);
           store.addImage({
             id: `ble-${cameraFrameId}`,
@@ -324,11 +342,29 @@ function handleCameraChunk(data: number[]) {
                 ]
               : undefined,
           });
-          if (outcome.reason === "error") {
+          if (outcome.reason === "saved") {
+            console.log("[BLE] Static capture: saved to patrol folder (node", nodeX2, ")");
+          } else if (outcome.reason === "clean") {
+            console.log("[BLE] Static capture: image clean, not saved (node", nodeX2, ")");
+          } else {
             console.warn("[BLE] Static capture AI failed:", outcome.error);
           }
-        })
-        .catch((error) => console.warn("[BLE] Static capture save failed:", error));
+        } catch (error) {
+          console.warn("[BLE] Static capture pipeline failed:", error);
+          // Hiển thị ảnh trên carousel ngay cả khi save thất bại
+          try {
+            store.addImage({
+              id: `ble-${cameraFrameId}`,
+              uri: `data:image/jpeg;base64,${bytesToBase64Chunked(jpegBytes)}`,
+              timestamp: new Date().toLocaleTimeString("vi-VN"),
+              temp,
+              humidity,
+            });
+          } catch {
+            // Nếu base64 fallback cũng fail → bỏ qua
+          }
+        }
+      })();
       return;
     }
 
@@ -336,33 +372,120 @@ function handleCameraChunk(data: number[]) {
     const shotKind: ShotKind = (shotKindRaw as ShotKind) <= 3 ? (shotKindRaw as ShotKind) : 0;
     const node: number = nodeX2;
 
-    // Create NodeImage object
-    const nodeImageData: Omit<NodeImage, "uri"> = {
-      frameId,
-      nodeX2: node,
-      shotKind,
-      pan,
-      tilt,
-      timestamp: new Date().toISOString(),
-      temperature: temp,
-      humidity,
-    };
-
-    // Save to disk and update patrol manifest
-    savePatrolImage(currentPatrol.id, node, shotKind, frameId, base64, nodeImageData)
-      .then((nodeImage) => {
-        // Add to patrolStore
-        patrolStore.addNodeImage(nodeImage);
-        console.log(
-          `[BLE] Image saved: node ${node}, shot ${shotKind}, pan ${pan}, tilt ${tilt}, frame ${frameId}`
-        );
-      })
-      .catch((error) => {
-        console.warn("[BLE] Failed to save image:", error);
-      });
-
+    // Chụp & nhận diện KHÔNG tách nhau: ảnh robot gửi → lưu file → quét
+    // AI on-device (analyzeCrackOnDevice) → hiện lên "ghi hình hiện trường"
+    // → nếu có vết nứt: lưu vào trang điểm dừng + cảnh báo.
     cameraChunks = [];
     cameraExpectedChunks = 0;
+    (async () => {
+      try {
+        const uri = await saveJpegBytes(jpegBytes, cameraFrameId);
+        const timestamp = new Date().toISOString();
+
+        let detection: DetectionInImage | null = null;
+        let analysis: ImageAnalysis | null = null;
+        try {
+          const result = await analyzeCrackOnDevice(uri);
+          if (result.isCrack) {
+            const box = result.boxes[0];
+            const bbox = box
+              ? {
+                  x: Math.round(box.x * 160),
+                  y: Math.round(box.y * 120),
+                  width: Math.round(box.w * 160),
+                  height: Math.round(box.h * 120),
+                }
+              : { x: 0, y: 0, width: 5, height: 5 };
+            detection = { label: "crack_small", confidence: result.confidence, bbox };
+            analysis = analyzeNodeImage({
+              detection,
+              temperature: temp,
+              humidity,
+              timestamp,
+            });
+          }
+        } catch (error) {
+          console.warn("[BLE] On-device crack scan failed:", error);
+        }
+
+        const nodeImageData: Omit<NodeImage, "uri"> = {
+          frameId,
+          nodeX2: node,
+          shotKind,
+          pan,
+          tilt,
+          timestamp,
+          temperature: temp,
+          humidity,
+          detection,
+          analysis,
+        };
+
+        const nodeImage = await savePatrolImageFromFile(
+          currentPatrol.id,
+          node,
+          shotKind,
+          frameId,
+          uri,
+          nodeImageData
+        );
+
+        patrolStore.addNodeImage(nodeImage);
+
+        // Hiện ảnh lên "ghi hình hiện trường" (CameraCard + carousel)
+        useDeviceStore.getState().addImage({
+          id: `ble-${cameraFrameId}`,
+          uri,
+          timestamp: new Date().toLocaleTimeString("vi-VN"),
+          temp,
+          humidity,
+          detections: detection
+            ? [{ label: detection.label, confidence: detection.confidence }]
+            : undefined,
+        });
+
+        // Có vết nứt → đưa vào trang điểm dừng (detection + cảnh báo)
+        if (detection) {
+          const detId = `detect-${Date.now()}`;
+          patrolStore.addDetectionEvent({
+            id: detId,
+            timestamp,
+            nodeX2: node,
+            shotKind,
+            label: detection.label,
+            confidence: detection.confidence,
+            bbox: detection.bbox ?? { x: 0, y: 0, width: 1, height: 1 },
+            temperature: temp,
+            humidity,
+          });
+          useDetectionStore.getState().addDetection({
+            id: detId,
+            patrolId: currentPatrol.id,
+            label: detection.label,
+            confidence: detection.confidence,
+            boundingBox: detection.bbox,
+            temperature: temp,
+            humidity,
+            distanceX2: node,
+            timestamp,
+            imageUri: nodeImage.uri,
+          });
+          useAlertStore.getState().addAlert({
+            id: `detect-${timestamp}-${Math.random().toString(36).slice(2, 6)}`,
+            type: "detect_patrol",
+            message: `📷 Tuần tra node ${node} (${(node * 0.5).toFixed(1)}m): phát hiện ${detection.label} — độ tin cậy ${(detection.confidence * 100).toFixed(1)}%, đã lưu vào điểm dừng`,
+            timestamp,
+            read: false,
+          });
+        }
+
+        console.log(
+          `[BLE] Image saved: node ${node}, shot ${shotKind}, pan ${pan}, tilt ${tilt}, frame ${frameId}${detection ? ` (crack ${(detection.confidence * 100).toFixed(1)}%)` : ""}`
+        );
+      } catch (error) {
+        console.warn("[BLE] Failed to process patrol image:", error);
+      }
+    })();
   }
 }
 

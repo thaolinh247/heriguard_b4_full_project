@@ -50,12 +50,8 @@ export default function TabsLayout() {
         options={{ title: "Biểu đồ" }}
       />
       <Tabs.Screen
-        name="ai"
-        options={{ title: "AI" }}
-      />
-      <Tabs.Screen
-        name="history"
-        options={{ title: "Lịch sử" }}
+        name="points"
+        options={{ title: "Điểm chụp" }}
       />
       <Tabs.Screen
         name="settings"

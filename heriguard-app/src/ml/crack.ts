@@ -1,3 +1,6 @@
+import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
+import * as jpeg from "jpeg-js";
+import { Buffer } from "buffer";
 import { CRACK_MODEL } from "./crack-model";
 import { EmbeddedNetwork } from "./runtime";
 
@@ -113,20 +116,41 @@ function boxesFromHeatmap(scores: Float32Array): CrackBox[] {
 }
 
 async function loadGrayImage(uri: string): Promise<Uint8Array> {
-  if (typeof document === "undefined") throw new Error("Bản thử nghiệm model cần chạy trên web.");
-  const image = new window.Image();
-  image.crossOrigin = "anonymous";
-  image.src = uri;
-  await new Promise<void>((resolve, reject) => {
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error("Không tải được dữ liệu ảnh."));
+  if (typeof document !== "undefined") {
+    const image = new window.Image();
+    image.crossOrigin = "anonymous";
+    image.src = uri;
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("Không tải được dữ liệu ảnh."));
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = SOURCE; canvas.height = SOURCE;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("Trình duyệt không hỗ trợ xử lý ảnh.");
+    context.drawImage(image, 0, 0, SOURCE, SOURCE);
+    const rgba = context.getImageData(0, 0, SOURCE, SOURCE).data;
+    const gray = new Uint8Array(SOURCE * SOURCE);
+    for (let i = 0; i < gray.length; i++) {
+      const p = i * 4;
+      gray[i] = (rgba[p] * 299 + rgba[p + 1] * 587 + rgba[p + 2] * 114) / 1000;
+    }
+    return gray;
+  }
+
+  // Native: resize bằng expo-image-manipulator → decode JPEG bằng jpeg-js → grayscale
+  const resized = await manipulateAsync(
+    uri,
+    [{ resize: { width: SOURCE, height: SOURCE } }],
+    { format: SaveFormat.JPEG, compress: 0.9 }
+  );
+  const fs = await import("expo-file-system");
+  const legacy = await import("expo-file-system/legacy");
+  const base64 = await legacy.readAsStringAsync(resized.uri, {
+    encoding: fs.EncodingType.Base64,
   });
-  const canvas = document.createElement("canvas");
-  canvas.width = SOURCE; canvas.height = SOURCE;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new Error("Trình duyệt không hỗ trợ xử lý ảnh.");
-  context.drawImage(image, 0, 0, SOURCE, SOURCE);
-  const rgba = context.getImageData(0, 0, SOURCE, SOURCE).data;
+  const decoded = jpeg.decode(Buffer.from(base64, "base64"), { useTArray: true });
+  const rgba = decoded.data;
   const gray = new Uint8Array(SOURCE * SOURCE);
   for (let i = 0; i < gray.length; i++) {
     const p = i * 4;

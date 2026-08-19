@@ -43,36 +43,43 @@ export async function saveStaticCaptureFromUri(
   try {
     result = await analyzeCrackOnDevice(sourceUri);
   } catch (error) {
-    console.warn("[StaticCapture] AI failed:", error);
-    return {
-      saved: false,
-      reason: "error",
-      error: error instanceof Error ? error.message : "AI thất bại",
-    };
+    console.warn("[StaticCapture] AI failed, saving without detection:", error);
+    // ML thất bại → vẫn lưu ảnh (không có detection) để dữ liệu không mất
+    result = { isCrack: false, confidence: 0, wholeImageScore: 0, boxes: [], heatmap: { grid: 0, scores: [] }, tookMs: 0 };
   }
 
-  // 2) Không đạt ngưỡng → ảnh sạch, không lưu
-  if (!result.isCrack) {
+  // 2) Không đạt ngưỡng → ảnh sạch, KHÔNG lưu (giống hành vi cũ)
+  //    Nhưng nếu temp/humidity hợp lệ (>0), vẫn lưu làm baseline
+  if (!result.isCrack && temp <= 0 && humidity <= 0) {
     return { saved: false, reason: "clean" };
   }
 
-  // 3) Đạt ngưỡng → dựng detection (bbox QQVGA 160×120) + phân tích
+  // 3) Dự detection nếu có crack
   const now = new Date().toISOString();
-  const box = result.boxes[0];
-  const bbox = box
-    ? { x: box.x * 160, y: box.y * 120, width: box.w * 160, height: box.h * 120 }
-    : undefined;
-  const detection = {
-    label: "crack_small",
-    confidence: result.confidence,
-    bbox,
-  };
-  const analysis = analyzeNodeImage({
-    detection,
-    temperature: temp,
-    humidity,
-    timestamp: now,
-  });
+  let detection: { label: string; confidence: number; bbox?: { x: number; y: number; width: number; height: number } } | null = null;
+  let analysis: import("@/types/robot").ImageAnalysis | null = null;
+
+  if (result.isCrack) {
+    const box = result.boxes[0];
+    const bbox = box
+      ? { x: box.x * 160, y: box.y * 120, width: box.w * 160, height: box.h * 120 }
+      : undefined;
+    detection = {
+      label: "crack_small",
+      confidence: result.confidence,
+      bbox,
+    };
+    try {
+      analysis = analyzeNodeImage({
+        detection,
+        temperature: temp,
+        humidity,
+        timestamp: now,
+      });
+    } catch (error) {
+      console.warn("[StaticCapture] analyzeNodeImage failed:", error);
+    }
+  }
 
   // 4) Lưu ảnh vào node folder + ghi manifest (tạo patrol mới 1 ảnh)
   const patrolId = `capture-${Date.now()}`;
@@ -89,27 +96,36 @@ export async function saveStaticCaptureFromUri(
     analysis,
   };
 
-  const nodeImage = await savePatrolImageFromFile(
-    patrolId,
-    nodeX2,
-    0,
-    0,
-    sourceUri,
-    nodeImageData
-  );
+  let nodeImage: NodeImage;
+  try {
+    nodeImage = await savePatrolImageFromFile(
+      patrolId,
+      nodeX2,
+      0,
+      0,
+      sourceUri,
+      nodeImageData
+    );
+  } catch (error) {
+    console.warn("[StaticCapture] savePatrolImageFromFile failed:", error);
+    // Fallback: tạo NodeImage với sourceUri thay vì file copy
+    nodeImage = { ...nodeImageData, uri: sourceUri };
+  }
 
-  // 5) Đồng bộ: phát hiện + sensor log + session đầy đủ
-  const detectionEvent: DetectionEvent = {
-    id: `detect-${Date.now()}`,
-    timestamp: now,
-    nodeX2,
-    shotKind: 0,
-    label: detection.label,
-    confidence: result.confidence,
-    bbox: bbox ?? { x: 0, y: 0, width: 1, height: 1 },
-    temperature: temp,
-    humidity,
-  };
+  // 5) Đồng bộ: detection + sensor log + session đầy đủ
+  const detectionEvent: DetectionEvent | null = detection
+    ? {
+        id: `detect-${Date.now()}`,
+        timestamp: now,
+        nodeX2,
+        shotKind: 0,
+        label: detection.label,
+        confidence: result.confidence,
+        bbox: detection.bbox ?? { x: 0, y: 0, width: 1, height: 1 },
+        temperature: temp,
+        humidity,
+      }
+    : null;
   const sensorLog: SensorReading = { timestamp: now, temperature: temp, humidity };
 
   const session: PatrolSession = {
@@ -118,7 +134,7 @@ export async function saveStaticCaptureFromUri(
     endTime: now,
     images: [nodeImage],
     mapMarkers: [],
-    detections: [detectionEvent],
+    detections: detectionEvent ? [detectionEvent] : [],
     sensorLogs: [sensorLog],
   };
 
@@ -130,30 +146,33 @@ export async function saveStaticCaptureFromUri(
 
   // 6) Đưa vào store: lịch sử tuần tra + danh sách phát hiện + cảnh báo
   usePatrolStore.getState().addCompletedPatrol(session);
-  useDetectionStore.getState().addDetection({
-    id: detectionEvent.id,
-    patrolId,
-    label: detectionEvent.label,
-    confidence: result.confidence,
-    boundingBox: bbox,
-    temperature: temp,
-    humidity,
-    distanceX2: nodeX2,
-    timestamp: now,
-    imageUri: nodeImage.uri,
-  });
-  useAlertStore.getState().addAlert({
-    id: `detect-${now}-${Math.random().toString(36).slice(2, 6)}`,
-    type: "detect_capture",
-    message: `📷 Chụp tại node ${nodeX2} (${(nodeX2 * 0.5).toFixed(1)}m): phát hiện ${detection.label} — độ tin cậy ${(result.confidence * 100).toFixed(1)}%, đã lưu ảnh + nhiệt độ/độ ẩm`,
-    timestamp: now,
-    read: false,
-  });
+
+  if (detectionEvent && detection) {
+    useDetectionStore.getState().addDetection({
+      id: detectionEvent.id,
+      patrolId,
+      label: detectionEvent.label,
+      confidence: result.confidence,
+      boundingBox: detection.bbox,
+      temperature: temp,
+      humidity,
+      distanceX2: nodeX2,
+      timestamp: now,
+      imageUri: nodeImage.uri,
+    });
+    useAlertStore.getState().addAlert({
+      id: `detect-${now}-${Math.random().toString(36).slice(2, 6)}`,
+      type: "detect_capture",
+      message: `📷 Chụp tại node ${nodeX2} (${(nodeX2 * 0.5).toFixed(1)}m): phát hiện ${detection.label} — độ tin cậy ${(result.confidence * 100).toFixed(1)}%, đã lưu ảnh + nhiệt độ/độ ẩm`,
+      timestamp: now,
+      read: false,
+    });
+  }
 
   console.log(
-    `[StaticCapture] Saved node ${nodeX2} (crack ${(result.confidence * 100).toFixed(1)}%) → ${patrolId}`
+    `[StaticCapture] Saved node ${nodeX2}${result.isCrack ? ` (crack ${(result.confidence * 100).toFixed(1)}%)` : " (clean)"} → ${patrolId}`
   );
-  return { saved: true, reason: "saved", nodeImage, session };
+  return { saved: true, reason: result.isCrack ? "saved" : "clean", nodeImage, session };
 }
 
 /**

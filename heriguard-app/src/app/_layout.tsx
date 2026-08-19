@@ -3,8 +3,7 @@ import { Stack } from "expo-router";
 import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
 import { useNotification } from "@/hooks/useNotification";
-import { usePatrolStore } from "@/store/patrolStore";
-import { hasDemoData, seedDemoData } from "@/lib/sim/seedDemoData";
+import { ensureDemoSeedFresh } from "@/lib/sim/seedDemoData";
 import "../../global.css";
 
 SplashScreen.preventAutoHideAsync();
@@ -21,21 +20,11 @@ export default function RootLayout() {
     "Helvetica-Compressed": require("../../assets/helvetica-255/helvetica-compressed-5871d14b6903a.otf"),
   });
 
-  // Load persisted patrols on app startup
+  // Load persisted patrols + chỉ seed demo khi app hoàn toàn trống (lần cài mới)
   useEffect(() => {
-    (async () => {
-      try {
-        await usePatrolStore.getState().loadPersistedHistory();
-        // Lần đầu (History trống): tạo dữ liệu mẫu để xem ngay compare/lưu trữ
-        const { patrols } = usePatrolStore.getState();
-        if (patrols.length === 0 && !(await hasDemoData())) {
-          await seedDemoData();
-          await usePatrolStore.getState().loadPersistedHistory();
-        }
-      } catch (error) {
-        console.warn("[RootLayout] Failed to load persisted patrols:", error);
-      }
-    })();
+    ensureDemoSeedFresh().catch((error) => {
+      console.warn("[RootLayout] Failed to load persisted patrols:", error);
+    });
   }, []);
 
   useEffect(() => {

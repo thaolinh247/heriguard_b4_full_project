@@ -2,6 +2,7 @@ import { useState } from "react";
 import { View, Text, ScrollView, Dimensions, TouchableOpacity, StyleSheet } from "react-native";
 import { LineChart } from "react-native-chart-kit";
 import { useDashboardStore } from "@/store/dashboardStore";
+import { getDemoChartPoints } from "@/lib/sim/demoChart";
 import { PlaqueCard } from "@/components/shared/PlaqueCard";
 import { Colors, Font } from "@/constants/theme";
 
@@ -16,7 +17,11 @@ const FILTERS: { key: TimeFilter; label: string }[] = [
 
 export default function ChartsScreen() {
   const [activeFilter, setActiveFilter] = useState<TimeFilter>("6h");
-  const chartData = useDashboardStore((s) => s.chartData);
+  const liveData = useDashboardStore((s) => s.chartData);
+
+  // Chưa có dữ liệu thật → dùng dữ liệu mẫu CỐ ĐỊNH (như phần Điểm chụp)
+  const isDemo = liveData.length <= 2;
+  const chartData = isDemo ? getDemoChartPoints() : liveData;
 
   const labels = chartData.map((d) => d.time);
   const tempData = chartData.map((d) => d.temp);
@@ -42,6 +47,12 @@ export default function ChartsScreen() {
           </TouchableOpacity>
         ))}
       </View>
+
+      {isDemo && (
+        <Text style={styles.demoHint}>
+          Đang hiển thị dữ liệu mẫu cố định — kết nối robot để xem dữ liệu thật
+        </Text>
+      )}
 
       {/* Main chart */}
       <PlaqueCard label="Nhiệt độ & Độ ẩm" style={styles.chartCard}>
@@ -172,6 +183,16 @@ const styles = StyleSheet.create({
   },
   pillTextActive: {
     color: Colors.paper,
+  },
+  demoHint: {
+    fontFamily: Font.regular,
+    fontSize: 10,
+    fontStyle: "italic",
+    color: Colors.jade,
+    backgroundColor: Colors.jadeLight,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 2,
   },
   chartCard: {
     padding: 12,

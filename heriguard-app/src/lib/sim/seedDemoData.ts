@@ -5,22 +5,33 @@ import type {
   PatrolSession,
   SensorReading,
   ShotKind,
+  CrackSeverity,
 } from "@/types/robot";
 import {
   savePatrolImageFromFile,
-  updatePatrolJson,
+  writePatrolManifest,
 } from "@/lib/fileStorage";
 import { analyzeNodeImage } from "@/lib/analyze";
 import { usePatrolStore } from "@/store/patrolStore";
 import { useDetectionStore } from "@/store/detectionStore";
 import { useAlertStore } from "@/store/alertStore";
-import { resolveSimUri, isCrackNode } from "@/lib/sim/simMedia";
+import { resolveWideUriForNode, resolveZoomUri } from "@/lib/sim/simMedia";
+import { CAPTURE_POINTS } from "@/constants/capturePoints";
 
 /**
  * ─────────────────────────────────────────────────────────────
- * SEED DEMO DATA — 3 lần tuần tra mẫu (lưu vào ổ đĩa thật)
- * Lần 1 (14 ngày trước) → Lần 2 (7 ngày) → Lần 3 (1 ngày)
- * Diện tích nứt tăng dần theo từng lần → demo so sánh + cảnh báo
+ * SEED DEMO DATA — 6 lần tuần tra mẫu (lưu vào ổ đĩa thật)
+ * 3 ngày × 2 lần/ngày (sáng 8h + chiều 15h)
+ *
+ * Mỗi lần tuần tra tại điểm chụp tạo 1 ảnh:
+ *   - Sáng (patrol index chẵn) → ảnh WIDE CỐ ĐỊNH theo điểm chụp
+ *     (mỗi điểm chụp 1 ảnh wide dùng cho TẤT CẢ các ngày)
+ *   - Chiều (patrol index lẻ)  → ảnh ZOOM theo dayIndex
+ *     (3 ảnh vết nứt khác nhau, mỗi ngày 1 ảnh)
+ *
+ * Severity mapping (theo ngày 3 mới nhất → ngày 1 cũ nhất):
+ *   Điểm chụp 1: ngày 3→Cần chú ý, ngày 2→An toàn, ngày 1→Cần chú ý
+ *   Điểm chụp 2: ngày 3→An toàn, ngày 2→Cần chú ý, ngày 1→Cảnh báo
  * ─────────────────────────────────────────────────────────────
  */
 
@@ -31,70 +42,34 @@ function isoDaysAgo(days: number, hourOffset = 0): string {
   return d.toISOString();
 }
 
-/** Bbox nứt theo node và lần tuần tra: rộng dần mỗi lần để demo trend (khung QQVGA 160×120) */
-function bboxFor(patrolIndex: number, nodeX2: number) {
-  const grow = patrolIndex * 7;
-  return {
-    x: 34 + nodeX2 * 4,
-    y: 26 + nodeX2 * 3,
-    width: 18 + nodeX2 * 3 + grow,
-    height: 12 + nodeX2 * 2 + grow * 0.7,
-  };
-}
+/** Severity theo ngày cho từng capture point: [ngày 3 (mới nhất), ngày 2, ngày 1 (cũ nhất)] */
+const SEVERITY_MAP: Record<number, CrackSeverity[]> = {
+  // Điểm chụp 1 (node 1): Trung bình → Thấp → Trung bình
+  1: ["medium", "low", "medium"],
+  // Điểm chụp 2 (node 2): Thấp → Trung bình → Cao
+  2: ["low", "medium", "high"],
+};
 
-function buildImage(
-  nodeX2: number,
-  patrolIndex: number,
-  temp: number,
-  humidity: number,
-  timestamp: string
-): Omit<NodeImage, "uri"> {
-  const frameId = patrolIndex * 1000 + nodeX2;
-  const shotKind: ShotKind = 0;
+// Nhiệt độ/độ ẩm theo severity — khớp tình trạng ảnh
+const SEV_TEMP: Record<CrackSeverity, number> = { low: 26.2, medium: 27.9, high: 29.6 };
+const SEV_HUM: Record<CrackSeverity, number> = { low: 61.8, medium: 67.8, high: 73.8 };
 
-  if (!isCrackNode(nodeX2)) {
-    return {
-      frameId,
-      nodeX2,
-      shotKind,
-      pan: 90,
-      tilt: 90,
-      timestamp,
-      temperature: temp,
-      humidity,
-      detection: null,
-    };
-  }
+// Thông số detection để analyzeNodeImage() ra đúng severity mong muốn
+const SEV_CONF: Record<CrackSeverity, number> = { low: 0.52, medium: 0.62, high: 0.78 };
+const SEV_BBOX: Record<CrackSeverity, { w: number; h: number }> = {
+  low: { w: 8, h: 5 }, // area ~0.2% → low
+  medium: { w: 16, h: 10 }, // area ~0.8% + conf>=0.6 → medium
+  high: { w: 42, h: 24 }, // area >=5% + conf>=0.75 → high
+};
 
-  const bbox = bboxFor(patrolIndex, nodeX2);
-  const detection = {
-    label: "crack_small" as const,
-    confidence: Math.min(0.985, 0.87 + patrolIndex * 0.03 + nodeX2 * 0.008),
-    bbox,
-  };
-  const analysis = analyzeNodeImage({
-    detection,
-    temperature: temp,
-    humidity,
-    timestamp,
-  });
-
-  return {
-    frameId,
-    nodeX2,
-    shotKind,
-    pan: 90,
-    tilt: 90,
-    timestamp,
-    temperature: temp,
-    humidity,
-    detection,
-    analysis,
-  };
+/** Patrol index → severity index (0=ngày 3, 1=ngày 2, 2=ngày 1) */
+function severityForPatrol(capturePointId: number, patrolIndex: number): CrackSeverity {
+  const dayIdx = Math.floor(patrolIndex / 2); // 0,0,1,1,2,2 → 0,1,2
+  return SEVERITY_MAP[capturePointId][dayIdx];
 }
 
 function buildMarker(nodeX2: number, temp: number, humidity: number, timestamp: number): MapMarker {
-  const hasIssue = isCrackNode(nodeX2);
+  const hasIssue = nodeX2 === 1 || nodeX2 === 2;
   const flags = hasIssue ? 0x20 : 0;
   return {
     distanceX2: nodeX2,
@@ -113,13 +88,17 @@ function buildMarker(nodeX2: number, temp: number, humidity: number, timestamp: 
   };
 }
 
+const CAPTURE_NODE_X2 = new Set(CAPTURE_POINTS.map((p) => p.nodeX2));
+
 async function buildDemoPatrol(
   patrolIndex: number,
-  daysAgo: number
+  daysAgo: number,
+  hourOffset: number
 ): Promise<PatrolSession> {
-  const id = `demo-${patrolIndex + 1}`;
-  const startTime = isoDaysAgo(daysAgo, 8);
-  const endTime = isoDaysAgo(daysAgo, 9);
+  const id = `demo-v4-${patrolIndex + 1}`;
+  const startTime = isoDaysAgo(daysAgo, hourOffset);
+  const endTime = isoDaysAgo(daysAgo, hourOffset + 1);
+  const isMorning = hourOffset < 12;
 
   const images: NodeImage[] = [];
   const sensorLogs: SensorReading[] = [];
@@ -127,74 +106,117 @@ async function buildDemoPatrol(
   const detections: DetectionEvent[] = [];
 
   for (let nodeX2 = 0; nodeX2 < 7; nodeX2++) {
-    const temp = 25.4 + nodeX2 * 0.8 + patrolIndex * 0.4;
-    const humidity = 58 + nodeX2 * 1.5 - patrolIndex * 1.2;
-    const timestamp = isoDaysAgo(daysAgo, 8);
-    const imageBase = buildImage(nodeX2, patrolIndex, temp, humidity, timestamp);
-
-    const sourceUri = await resolveSimUri(nodeX2);
-    const nodeImage = await savePatrolImageFromFile(
-      id,
-      nodeX2,
-      imageBase.shotKind,
-      imageBase.frameId,
-      sourceUri,
-      imageBase
-    );
-    images.push(nodeImage);
+    // Xác định capture point + severity trước (dùng cho temp/humidity)
+    const cp = CAPTURE_POINTS.find((p) => p.nodeX2 === nodeX2);
+    const dayIndex = Math.floor(patrolIndex / 2); // 0,0,1,1,2,2 → 0,1,2 (ngày 3, ngày 2, ngày 1)
+    const severity = severityForPatrol(cp?.id ?? 2, patrolIndex);
+    // Nhiệt độ/độ ẩm theo severity — khớp tình trạng ảnh
+    const temp = SEV_TEMP[severity] + nodeX2 * 0.2;
+    const humidity = SEV_HUM[severity] + nodeX2 * 0.5;
+    const timestamp = isoDaysAgo(daysAgo, hourOffset);
 
     sensorLogs.push({ timestamp, temperature: temp, humidity });
     mapMarkers.push(buildMarker(nodeX2, temp, humidity, nodeX2 * 180));
 
-    if (imageBase.detection && imageBase.detection.bbox) {
-      detections.push({
-        id: `${id}-${nodeX2}`,
-        timestamp,
-        nodeX2,
-        shotKind: 0,
-        label: imageBase.detection.label,
-        confidence: imageBase.detection.confidence,
-        bbox: imageBase.detection.bbox,
-        temperature: temp,
-        humidity,
-      });
+    if (!CAPTURE_NODE_X2.has(nodeX2)) continue;
+
+    const sourceUri = isMorning
+      ? await resolveWideUriForNode(nodeX2)
+      : await resolveZoomUri(dayIndex);
+    const shotKind: ShotKind = isMorning ? 0 : 2;
+    const frameId = patrolIndex * 1000 + nodeX2 * 10 + shotKind;
+
+    // Bbox + detection dựa vào severity (giống demoView)
+    const zoomScale = shotKind === 0 ? 1 : 1.6;
+    const size = SEV_BBOX[severity];
+    const bbox = {
+      x: 34 + nodeX2 * 4,
+      y: 26 + nodeX2 * 3,
+      width: size.w * zoomScale,
+      height: size.h * zoomScale,
+    };
+
+    const detection = {
+      label: "crack_small" as const,
+      confidence: SEV_CONF[severity],
+      bbox,
+    };
+
+    const analysis = analyzeNodeImage({
+      detection,
+      temperature: temp,
+      humidity,
+      timestamp,
+    });
+
+    const imageBase: Omit<NodeImage, "uri"> = {
+      frameId,
+      nodeX2,
+      shotKind,
+      pan: shotKind === 0 ? 90 : 85,
+      tilt: shotKind === 0 ? 90 : 75,
+      timestamp,
+      temperature: temp,
+      humidity,
+      detection,
+      analysis,
+    };
+
+    let nodeImage: NodeImage;
+    try {
+      nodeImage = await savePatrolImageFromFile(
+        id, nodeX2, shotKind, frameId, sourceUri, imageBase
+      );
+    } catch (err) {
+      console.warn(`[SeedDemo] copyAsync fail ${id} node ${nodeX2}:`, err);
+      nodeImage = { ...imageBase, uri: sourceUri };
     }
+
+    images.push(nodeImage);
+
+    detections.push({
+      id: `${id}-${nodeX2}`,
+      timestamp,
+      nodeX2,
+      shotKind,
+      label: detection.label,
+      confidence: detection.confidence,
+      bbox: detection.bbox,
+      temperature: temp,
+      humidity,
+    });
   }
 
   return { id, startTime, endTime, images, mapMarkers, detections, sensorLogs };
 }
 
 /**
- * Tạo 3 lần tuần tra mẫu — đồng bộ lên store + lưu đĩa.
- * Idempotent: nếu patrol "demo-2" đã tồn tại thì bỏ qua.
+ * Tạo 6 lần tuần tra mẫu — đồng bộ lên store + lưu đĩa.
+ * Idempotent: nếu patrol "demo-v4-*" đã tồn tại thì bỏ qua.
+ * KHÔNG xóa bất kỳ dữ liệu nào đã có sẵn.
  */
 export async function seedDemoData(): Promise<void> {
   if (seedingInProgress) return seedingInProgress;
   seedingInProgress = (async () => {
-    const existing = usePatrolStore.getState().patrols;
-    if (existing.some((p) => p.id.startsWith("demo-"))) return;
+    const current = usePatrolStore.getState().patrols;
+    if (current.some((p) => p.id.startsWith("demo-v4-"))) return;
+    if (current.length > 0) return;
 
     const patrols = await Promise.all([
-      buildDemoPatrol(0, 14),
-      buildDemoPatrol(1, 7),
-      buildDemoPatrol(2, 1),
+      buildDemoPatrol(0, 1, 8),    // NGÀY 3 (mới nhất) — sáng (wide)
+      buildDemoPatrol(1, 1, 15),   // NGÀY 3 — chiều (zoom)
+      buildDemoPatrol(2, 7, 8),    // NGÀY 2 — sáng (wide)
+      buildDemoPatrol(3, 7, 15),   // NGÀY 2 — chiều (zoom)
+      buildDemoPatrol(4, 14, 8),   // NGÀY 1 (cũ nhất) — sáng (wide)
+      buildDemoPatrol(5, 14, 15),  // NGÀY 1 — chiều (zoom)
     ]);
 
-    // Lưu metadata mỗi patrol lên đĩa
     for (const p of patrols) {
-      await updatePatrolJson(p.id, {
-        startTime: p.startTime,
-        endTime: p.endTime,
-        mapMarkers: p.mapMarkers,
-        detections: p.detections,
-        sensorLogs: p.sensorLogs,
-      });
+      await writePatrolManifest(p.id, p);
     }
 
-    // Đồng bộ lên store (newest first)
     usePatrolStore.getState().importPatrols(patrols);
 
-    // Phát hiện → detectionStore (cho bảng lịch sử)
     useDetectionStore
       .getState()
       .addDetections(
@@ -216,18 +238,17 @@ export async function seedDemoData(): Promise<void> {
         )
       );
 
-    // Cảnh báo xu hướng: node 3-6 tăng liên tiếp qua 3 lần
-    for (const nodeX2 of [3, 4, 5, 6]) {
+    for (const point of CAPTURE_POINTS) {
       useAlertStore.getState().addAlert({
-        id: `seed-trend-${nodeX2}`,
+        id: `seed-trend-${point.nodeX2}`,
         type: "crack_increased",
-        message: `⚠ Node ${nodeX2} (${(nodeX2 * 0.5).toFixed(1)}m): diện tích nứt tăng liên tiếp qua 3 lần tuần tra — cần kiểm tra`,
-        timestamp: isoDaysAgo(1, 9),
+        message: `⚠ ${point.label} (${point.distanceLabel}): diện tích nứt tăng liên tiếp qua 3 ngày — cần kiểm tra`,
+        timestamp: isoDaysAgo(1, 15),
         read: false,
       });
     }
 
-    console.log("[SeedDemo] Đã tạo 3 lần tuần tra mẫu (14/7/1 ngày trước)");
+    console.log("[SeedDemo] Đã tạo 6 lần tuần tra mẫu (3 ngày × sáng=wide/chiều=zoom)");
   })();
 
   try {
@@ -237,8 +258,15 @@ export async function seedDemoData(): Promise<void> {
   }
 }
 
-/** Xem có dữ liệu mẫu trên đĩa không (để không seed lại) */
-export async function hasDemoData(): Promise<boolean> {
-  const patrols = await import("@/lib/fileStorage").then((m) => m.loadPersistedPatrols());
-  return patrols.some((p) => p.id.startsWith("demo-"));
+/**
+ * Đảm bảo dữ liệu mẫu cho lần cài mới:
+ * Chỉ seed khi TRẠNG THÁI HOÀN TOÀN TRỐNG (chưa có patrol nào).
+ * KHÔNG xóa, KHÔNG thay thế bất kỳ dữ liệu đã có.
+ * Mọi thay đổi hiển thị về sau do demoView đảm nhiệm (không đụng store/đĩa).
+ */
+export async function ensureDemoSeedFresh(): Promise<void> {
+  await usePatrolStore.getState().loadPersistedHistory();
+  const current = usePatrolStore.getState().patrols;
+  if (current.length > 0) return;
+  await seedDemoData();
 }

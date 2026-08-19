@@ -12,31 +12,19 @@ import { useRouter } from "expo-router";
 import { PlaqueCard } from "@/components/shared/PlaqueCard";
 import { useSettingsStore } from "@/store/settingsStore";
 import { useDeviceStore } from "@/store/deviceStore";
-import { startMockBle, stopMockBle } from "@/lib/mockBle";
 import { Colors, Font } from "@/constants/theme";
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const mockMode = useSettingsStore((s) => s.mockMode);
   const bleDeviceName = useSettingsStore((s) => s.bleDeviceName);
   const stationId = useSettingsStore((s) => s.stationId);
   const geminiApiKey = useSettingsStore((s) => s.geminiApiKey);
   const geminiMockMode = useSettingsStore((s) => s.geminiMockMode);
-  const setMockMode = useSettingsStore((s) => s.setMockMode);
   const setGeminiApiKey = useSettingsStore((s) => s.setGeminiApiKey);
   const setGeminiMockMode = useSettingsStore((s) => s.setGeminiMockMode);
   const connectionStatus = useDeviceStore((s) => s.connectionStatus);
 
   const [editingKey, setEditingKey] = useState(false);
-
-  const handleToggleMock = (enabled: boolean) => {
-    setMockMode(enabled);
-    if (enabled) {
-      startMockBle();
-    } else {
-      stopMockBle();
-    }
-  };
 
   const handleScan = () => {
     router.push("/device/scan" as any);
@@ -81,26 +69,6 @@ export default function SettingsScreen() {
         <TouchableOpacity style={styles.scanButton} onPress={handleScan}>
           <Text style={styles.scanButtonText}>Quét thiết bị</Text>
         </TouchableOpacity>
-      </PlaqueCard>
-
-      {/* Mock mode */}
-      <PlaqueCard label="Chế độ mô phỏng" style={styles.card}>
-        <View style={styles.switchRow}>
-          <View style={styles.switchText}>
-            <Text style={styles.fieldLabel}>Bật mô phỏng dữ liệu</Text>
-            <Text style={styles.fieldHint}>
-              {mockMode
-                ? "Đang dùng dữ liệu giả lập"
-                : "Sẽ kết nối BLE thật"}
-            </Text>
-          </View>
-          <Switch
-            value={mockMode}
-            onValueChange={handleToggleMock}
-            trackColor={{ false: Colors.line, true: Colors.jadeLight }}
-            thumbColor={mockMode ? Colors.jade : Colors.inkSoft}
-          />
-        </View>
       </PlaqueCard>
 
       {/* Gemini AI */}

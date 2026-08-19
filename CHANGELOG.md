@@ -6,6 +6,269 @@ Lịch sử thay đổi toàn bộ dự án (heriguard-app + heriguard-robot).
 
 ## Unreleased
 
+### 2026-08-19 — Fix: Phân tích xu hướng dùng real Gemini API + chi tiết hơn; thêm dữ liệu biểu đồ mẫu
+
+**Lý do**: (1) Phân tích xu hướng tại 2 điểm chụp đang ưu tiên mock cố định (auto-run luôn mock) — user yêu cầu PHẢI gọi real Gemini API; (2) bản phân tích cần chi tiết hơn (từng ngày, số liệu cụ thể); (3) biểu đồ Nhiệt độ/Độ ẩm rỗng khi chưa kết nối robot — cần dữ liệu mẫu cố định như phần Điểm chụp.
+
+**heriguard-app**
+- `src/lib/gemini.ts`: `buildTrendPrompt` viết lại chi tiết — thêm tham số `context` (tên điểm chụp), đưa bảng số liệu từng ngày + tóm tắt chỉ số, yêu cầu JSON gồm `summary` 3-4 câu, `tempTrend`/`humidityTrend`/`detectionTrend` dài hơn kèm số liệu, `dayDetails[]` (từng ngày: temp/humidity/số phát hiện/severity/note), `insights` và `recommendations` 4 mục mỗi loại. `analyzeTrendsWithGemini(apiKey, context, points)` parse `dayDetails`.
+- `src/components/dashboard/DayTrendCard.tsx`: CHỈ dùng real Gemini API — bỏ hoàn toàn mock fallback ở phân tích xu hướng (`doAnalyze` luôn gọi `analyzeTrendsWithGemini`, không còn `mockTrendAnalyze`). Auto-run chạy khi có đủ data (≥2 ngày) + có API key; không có key → hướng dẫn cấu hình trong Cài đặt; API lỗi → hiện lỗi rõ ràng + cho thử lại. Thêm prop `context`. Thêm section "Từng ngày" hiển thị `dayDetails` (day, date, °C, %, số phát hiện, severity, note).
+- `src/app/capture-point/[id].tsx`: Truyền `context="${point.label} (${point.distanceLabel})"` vào DayTrendCard.
+- `src/types/gemini.ts`: Thêm `TrendDayDetail` + `dayDetails` vào `TrendAnalysis`.
+- `src/lib/mockGemini.ts`: `mockTrendAnalyze` trả `dayDetails` (NGÀY 3→1 mới→cũ, gắn số liệu + note) — dùng khi fallback.
+- `src/lib/sim/demoChart.ts` (MỚI): 24 điểm dữ liệu biểu đồ cố định theo chu kỳ ngày (nhiệt độ 25–30°C, độ ẩm 60–74%), deterministic, khớp dải demoView.
+- `src/app/(tabs)/charts.tsx`: Nếu chưa có dữ liệu thật → dùng `getDemoChartPoints()` + ghi chú "Đang hiển thị dữ liệu mẫu cố định".
+
+**Kết quả**: Cả 2 điểm chụp khi mở folder tự phân tích xu hướng bằng Gemini thật (nếu có key), kết quả chi tiết theo từng ngày; biểu đồ Nhiệt độ & Độ ẩm luôn có nội dung.
+
+### 2026-08-19 — Fix: Tình trạng 2 điểm chụp khác nhau + ngày 3 = mới nhất + dữ liệu khớp severity
+
+**Lý do**: Cả 2 điểm chụp đang hiển thị cùng chuỗi tình trạng Thấp→Trung bình→Cao. User yêu cầu: (1) tình trạng 2 điểm phải KHÁC nhau; (2) đổi tag: trung bình→thấp, thấp→trung bình; (3) NGÀY 3 = mới nhất (1 ngày trước), NGÀY 1 = cũ nhất (14 ngày trước); (4) nhiệt độ/độ ẩm phải phù hợp với tình trạng ảnh (severity càng cao → môi trường càng bất lợi).
+
+**heriguard-app**
+- `src/lib/sim/demoView.ts`: `DAY_SEVERITY` chung → `POINT_SEVERITY` theo điểm: Điểm 1 = [Trung bình, Thấp, Trung bình], Điểm 2 = [Thấp, Trung bình, Cao] (theo ngày 3→1). `DAYS_AGO` đảo: [1, 7, 14] (ngày 3 mới nhất). `POINT_TEMPS/POINT_HUMS` → `SEV_TEMP/SEV_HUM` cố định theo severity (low 26.2°C/61.8%, medium 27.9°C/67.8%, high 29.6°C/73.8%).
+- `src/lib/sim/seedDemoData.ts`: Đồng bộ — `SEVERITY_MAP` theo điểm, patrol ngày 3 = 1 ngày trước, temp/humidity theo severity, bbox/confidence theo `SEV_CONF/SEV_BBOX` (giống demoView).
+
+**Kết quả**: Tab Điểm chụp — Điểm 1 badge "Cần chú ý", Điểm 2 badge "Cảnh báo"; ngày trong folder đúng thứ tự NGÀY 3 mới nhất; số liệu môi trường tăng theo mức độ hư hại.
+
+### 2026-08-19 — Fix: Dữ liệu mẫu CỐ ĐỊNH thuần view (bỏ purge/seed lại)
+
+**Lý do**: User không muốn cơ chế "xóa dữ liệu cũ → seed lại" (có thể vô tình xóa dữ liệu). Yêu cầu: ảnh + dữ liệu phải CỐ ĐỊNH — mỗi điểm chụp 3 ngày, mỗi ngày đúng 2 ảnh (1 wide chung cho mọi ngày + 1 zoom khác nhau mỗi ngày), số ngày/ảnh ngoài folder khớp bên trong (3 ngày/6 ảnh).
+
+**heriguard-app**
+- `src/lib/sim/demoView.ts` (MỚI): Dữ liệu mẫu deterministic thuần view — `buildDemoDays(nodeX2)` / `buildDemoDayBlocks(nodeX2)` / `useDemoBlocks(nodeX2, enabled)` / `hasDemoPatrols(patrols)`. 3 ngày cố định: ảnh wide theo `resolveWideUriForNode`, zoom theo `resolveZoomUri(dayIndex)`, nhiệt độ/độ ẩm/severity (low→medium→high) là hằng số; cache theo nodeX2. KHÔNG đọc store, KHÔNG lưu đĩa, không đổi qua mọi phiên chạy.
+- `src/app/(tabs)/points.tsx`: Khi app có patrol demo → hiển thị folder từ dữ liệu demo cố định (luôn 3 ngày/6 ảnh, badge/trạng thái ổn định) qua `PointFolderCard` + `useDemoBlocks`. Bỏ nút "Cập nhật dữ liệu mẫu" (đã thêm hôm trước).
+- `src/app/capture-point/[id].tsx`: Khi có patrol demo → `useDemoBlocks` thay cho `buildDayBlocks`: luôn 3 ngày × 2 ảnh đúng cấu trúc (wide + zoom, khác URI), có trạng thái loading. Bỏ phụ thuộc vào cấu trúc dữ liệu cũ.
+- `src/lib/sim/seedDemoData.ts`: Xóa `ensureDemoData()`, `purgeAllDemoPatrols()`, marker version AsyncStorage. Thay bằng `ensureDemoSeedFresh()` — chỉ seed khi store hoàn toàn trống (lần cài mới); `seedDemoData()` bỏ luôn việc dọn demo cũ (guard: có patrol nào rồi thì không seed). KHÔNG BAO GIỜ xóa dữ liệu.
+- `src/app/_layout.tsx`: Gọi `ensureDemoSeedFresh()`.
+
+**Kết quả**: Mọi patrol demo cũ (bất kể 6 ngày/6 ảnh) giờ được hiển thị theo cấu trúc cố định 3 ngày × 2 ảnh; không còn xóa/thay thế dữ liệu.
+
+### 2026-08-18 — Fix: Đảm bảo seed demo chạy được + nút cập nhật trên tab
+
+**Lý do**: App vẫn hiển thị dữ liệu demo CŨ (6 ngày/6 ảnh ngoài folder, 3 ngày/3 ảnh bên trong — mỗi ngày 1 ảnh) — seed mới chưa từng chạy vì user chưa reload hoàn toàn và không có cách kích hoạt từ UI.
+
+**heriguard-app**
+- `src/lib/sim/seedDemoData.ts`: `ensureDemoData()` viết lại — dùng marker version trong AsyncStorage (`heriguard_demo_seed_version`); nếu khác `v4` → **xóa MỌI demo mọi prefix** (`demo-*`) khỏi store + đĩa, seed `demo-v4`, ghi marker, load lại. Idempotent, lặp lại được.
+- `src/app/(tabs)/points.tsx`: Hiển thị **nút "Cập nhật dữ liệu mẫu (3 ngày × 2 ảnh/ngày)"** + ActivityIndicator + message kết quả. Tự chạy `ensureDemoData()` khi mở tab.
+
+### 2026-08-18 — Fix: Tự dọn demo cũ khi mở tab Điểm chụp
+
+**Lý do**: Seed/cleanup chỉ chạy lúc app khởi động → Fast Refresh không kích hoạt → user không thấy thay đổi trên tab Điểm chụp.
+
+**heriguard-app**
+- `src/lib/sim/seedDemoData.ts`: Thêm `ensureDemoData()` — load persisted, dọn demo cũ (non v4) khỏi store + đĩa, seed demo-v4 nếu thiếu, load lại. Idempotent.
+- `src/app/(tabs)/points.tsx`: Gọi `ensureDemoData()` trong `useEffect` khi mở tab → tab tự cập nhật (dọn 6 ngày cũ → 3 ngày, wide cố định + zoom khác nhau mỗi ngày).
+- `src/app/_layout.tsx`: Đơn giản hóa startup → dùng `ensureDemoData()`.
+
+### 2026-08-18 — Fix: Cấu trúc ảnh seed đúng yêu cầu (wide cố định + zoom khác nhau)
+
+**Lý do**: (1) Mỗi ngày phải có đủ 2 ảnh: 1 wide + 1 zoom; (2) Mỗi điểm chụp dùng CHUNG 1 ảnh wide cho tất cả các ngày; (3) Ảnh zoom khác nhau mỗi ngày; (4) Số ngày/ảnh ngoài folder phải khớp thực tế bên trong (3 ngày, 2 ảnh/ngày).
+
+**heriguard-app**
+- `src/lib/sim/simMedia.ts`: Thêm `resolveWideUriForNode(nodeX2)` — 1 ảnh wide CỐ ĐỊNH cho mỗi điểm chụp (node 1 → ảnh A, node 2 → ảnh B). `resolveZoomUri(dayIndex)` — dayIndex 0,1,2 → crack-low/medium/high (mỗi ngày khác nhau). Bỏ `ZOOM_MODULES` theo severity cũ.
+- `src/lib/sim/seedDemoData.ts`: Sáng → `resolveWideUriForNode(nodeX2)` (wide chung), chiều → `resolveZoomUri(dayIndex)`. Seed dọn sạch mọi demo cũ (demo-*, v2, v3) khỏi store + đĩa trước khi tạo `demo-v4-*`.
+- `src/app/capture-point/[id].tsx`: `DayOverviewCard` sort shotKind (wide trước), chọn wide + zoom khác URI — đảm bảo không hiện 2 ảnh giống nhau.
+- `src/app/_layout.tsx`: Cleanup demo cũ giữ lại `demo-v4-*`.
+
+### 2026-08-18 — Fix: Ảnh trùng lặp + TypeScript error displayImages
+
+**Lý do**: (1) `resolveWideUri()` dùng `Math.random()` → cả 2 patrol cùng ngày có thể chọn cùng 1 ảnh wide; (2) `resolveZoomUri(severity)` trả cùng 1 ảnh cho cùng severity → zoom trông giống hệt nhau; (3) `displayImages` filter `Boolean` không type-safe → runtime error.
+
+**heriguard-app**
+- `src/lib/sim/simMedia.ts`: `resolveWideUri()` chuyển sang **round-robin** (không còn random). `ZOOM_MODULES` mở rộng thành mảng 2-3 ảnh mỗi severity (thêm ảnh heritage-site làm zoom variety). `resolveZoomUri(severity, patrolIndex)` dùng patrolIndex để chọn ảnh khác nhau.
+- `src/lib/sim/seedDemoData.ts`: Truyền `patrolIndex` vào `resolveZoomUri()`. Đổi prefix `demo-v3-` để force re-seed.
+- `src/app/capture-point/[id].tsx`: Fix TypeScript — `displayImages` khai báo rõ类型, spread operator thay vì `filter(Boolean)`.
+- `src/app/_layout.tsx`: Cleanup old demo data (`demo-*` không phải `demo-v3-*`).
+
+**heriguard-robot (firmware)**
+- `src/main.cpp`: Thêm `patrolWithRightTurns(timeoutMs)` — bám line phải, khi phát hiện ngã rẽ phải (junctionType==2) → dừng + xoay phải 90° bằng `turnByAngle` (IMU Roll), tiếp tục bám line đến khi mất line hoặc timeout. `loop()` gọi hàm này khi `gMosaicRequested` (BTN_DOWN).
+
+### 2026-08-18 — Fix: Ảnh đúng thư mục + ControlPanel 3 nút + AI summary chi tiết
+
+**Lý do**: (1) Ảnh seed data dùng sai đường dẫn Unicode (`assets/vết nứt/`, `assets/di tích nứt/`) → copy sang `assets/images/heritage-site/` + `assets/images/crack-detail/` (ASCII) để Metro bundler load đúng; (2) ControlPanel chỉ có1 nút dừng; (3) AI trend analysis quá ngắn; (4) Ngày mới nhất cần số lớn nhất; (5) Summary rule-based cần thay bằng AI thật có nút riêng.
+
+**heriguard-app**
+- `assets/images/heritage-site/`: Copy 7 ảnh từ `assets/di tích nứt/` (ASCII paths).
+- `assets/images/crack-detail/`: Copy 3 ảnh từ `assets/vết nứt/` (ASCII paths).
+- `src/lib/sim/simMedia.ts`: Đường dẫn ảnh dùng `heritage-site/` + `crack-detail/` (ASCII).
+- `src/lib/sim/seedDemoData.ts`: Thêm logging `[SeedDemo]` để debug ảnh wide/zoom.
+- `src/app/capture-point/[id].tsx`: **NGÀY số lớn nhất = mới nhất** (`displayBlocks.length - i`). **Nút "Tóm tắt bằng AI"** riêng cho mỗi ngày — gọi `analyzeDaySummaryWithGemini` (Gemini thật, có gửi ảnh đầu tiên). Bỏ summary rule-based sẵn có.
+- `src/lib/gemini.ts`: Thêm **`analyzeDaySummaryWithGemini`** — prompt chi tiết 5-8 câu (tổng quan, severity, môi trường, so sánh, khuyến nghị). Gửi ảnh JPEG đầu tiên để Gemini phân tích visual.
+- `src/lib/mockGemini.ts`: **`mockTrendAnalyze` chi tiết hơn** — summary 3-5 câu với số liệu cụ thể, insights 3-4 mục, recommendations 3-4 mục (có mức độ khẩn cấp).
+
+### 2026-08-18 — Fix: Gemini 429 quota + ShotKind labels tiếng Việt
+
+**Lý do**: (1) Gemini API free tier quota 20 req/ngày → auto-run trên DayTrendCard liên tục gọi API → 429 → fallback mock nhưng lãng phí quota + hiện warning; (2) ShotKind labels hiển thị tiếng Anh ("Wide (A)", "Close High (D)") — cần tiếng Việt cho ban quản lý di tích.
+
+**heriguard-app**
+- `src/store/settingsStore.ts`: `geminiMockMode` default `true` → luôn dùng mock除非 user toggle "Dùng API thật" trong settings. Tránh lãng phí quota khi dev.
+- `src/types/robot.ts`: `SHOT_KIND_LABELS` chuyển sang tiếng Việt — `0: "Ảnh rộng"`, `1: "Ảnh cận thấp"`, `2: "Ảnh cận cao"`, `3: "Tùy chỉnh"`.
+
+**Lưu ý seed data**: Mỗi ngày tạo 2 ảnh/capture point: sáng → wide (`heritage-cracks/crack-1.jpg`), chiều → zoom (`wall-crack-{1,2,3}.jpg` theo severity). `buildDayBlocks` + `DayOverviewCard` render cả 2 ảnh.
+
+### 2026-08-18 — Fix: Emergency stop chỉ dừng robot, không chặn camera
+
+**Lý do**: Nút "DỪNG KHẨN CẤP" (`X`) trên firmware hiện tại set `patrolActive = false` → state machine dừng → `N` (chụp) vẫn chạy nhưng patrol bị kill hoàn toàn. Cần phân biệt: `X` = tạm dừng (robot dừng, camera vẫn chụp, patrol vẫn active) vs EMERGENCY (chướng ngại vật/mất line > 3s = dừng cứng).
+
+**heriguard-robot**
+- `src/main.cpp`:
+  - **`X` command**: Bỏ `patrolActive = false`. Giữ `patrolActive = true` + `robotState = IDLE` → state machine chạy nhưng IDLE = rỗng (motor dừng, camera hoạt động bình thường).
+  - **`P` command**: Bỏ guard `if (!patrolActive)` → luôn reinitialize (reset encoder, PID, runtime). Cần thiết vì `X` giữ `patrolActive = true`, nếu không bỏ guard thì `P` không hoạt động.
+
+**Flow sau fix**:
+- `X` → motor dừng, `robotState=IDLE`, `patrolActive=true` → camera `N` hoạt động
+- `P` → resume patrol (reset encoder, PID, `robotState=PATROL_MOVE`)
+- EMERGENCY (obstacle/line loss) → `patrolActive=false` → state machine dừng hoàn toàn (hard stop)
+
+### 2026-08-18 — Fix: VirtualMap hiện ảnh chụp + bỏ mô phỏng + AI phân tích điểm chụp
+
+**Lý do**: (1) Bấm "Chụp + Nhận diện" không thấy ảnh trong bản đồ mô phỏng; (2) Cần bỏ chế độ mô phỏng BLE realtime, chỉ giữ real BLE + robot thật; (3) Điểm chụp cần có nút phân tích AI + dữ liệu mẫu sẵn.
+
+**heriguard-app**
+- `src/components/dashboard/VirtualMap.tsx`: Khi không có tuần tra đang chạy, hiển thị **marker từ lần tuần tra gần nhất** (thay vì chỉ `currentMapMarkers` rỗng). Thêm **ảnh chụp mới nhất** từ patrol gần nhất lên góc trái bản đồ (thumbnail 80×60 + label node + detection). Luôn hiển thị cả marker từ `currentMapMarkers` và `patrols[0].mapMarkers`.
+- `src/lib/mockBle.ts`: Sau lệnh 'N' (Chụp + Nhận diện), thêm **map marker** vào `currentMapMarkers` — VirtualMap thấy marker ngay cả khi không trong patrol.
+- `src/app/(tabs)/settings.tsx`: **Xoá toggle "Bật mô phỏng dữ liệu"** + xoá import `startMockBle`/`stopMockBle`. Chỉ giữ: BLE connection, Gemini AI, About.
+- `src/app/(tabs)/index.tsx`: **Xoá auto-start mock BLE** — chỉ `tryReconnectLastDevice()` khi mở app. Bỏ import `startMockBle`/`stopMockBle`.
+- `src/components/dashboard/ControlPanel.tsx`: **Chỉ dùng `sendCommand` (real BLE)** — bỏ `mockSendCommand`, bỏ `mockMode` check. `canControl = isConnected` (không còn `|| mockMode`).
+- `src/store/settingsStore.ts`: `mockMode` default `false`.
+- `src/app/capture-point/[id].tsx`: **Di chuyển `DayTrendCard` lên đầu trang dữ liệu** (trước "3 ngày theo dõi") — AI phân tích theo ngày là nội dung chính. Thêm text hướng dẫn dữ liệu mẫu trong empty state.
+- `src/app/(tabs)/points.tsx`: Bỏ reference "bật mô phỏng" trong footer.
+
+**Seed data**: Giữ nguyên — 6 patrols mẫu (3 ngày × sáng/chiều) tạo dữ liệu nền cho 2 điểm chụp. `buildDayBlocks()` tự group theo ngày → AI phân tích luôn có data.
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+### 2026-08-18 — Fix: AI phân tích tự động + ảnh fallback cho điểm chụp
+
+**Lý do**: (1) AI phân tích xu hướng chỉ chạy khi bấm nút — cần auto-run khi mở trang để cảm giác "có sẵn dữ liệu"; (2) Ảnh từ seed data có thể không load nếu file URI lỗi — cần fallback placeholder.
+
+**heriguard-app**
+- `src/components/dashboard/DayTrendCard.tsx`: **Auto-run AI phân tích** khi mount (dùng `useEffect` + `useRef` prevent duplicate). Luôn dùng mock khi không có Gemini API key. Fallback mock nếu API lỗi.
+- `src/app/capture-point/[id].tsx`: **Thêm `onError` fallback** cho ảnh trong DayOverviewCard — nếu URI không load, hiển thị placeholder thay vì blank. Thêm `useState` cho hero/second image error tracking.
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+### 2026-08-18 — Fix: Manifest race condition — patrol data không lưu được
+
+**Lý do**: `savePatrolImageFromFile` tạo manifest half-written → `updatePatrolJson` gọi sau không tìm thấy (URI path issue) → "demo-X not found" → `loadPersistedPatrols` trả 0 patrols → capture points hiện rỗng.
+
+**heriguard-app**
+- `src/lib/fileStorage.ts`: Thêm **`writePatrolManifest()`** — ghi PatrolSession hoàn chỉnh trực tiếp lên disk, không cần read trước (tránh race condition). Thêm logging cho `listPatrolDirs`, `loadPersistedPatrols`, `writePatrolManifest`.
+- `src/lib/sim/seedDemoData.ts`: **Bỏ `updatePatrolJson`**, dùng `writePatrolManifest` — ghi manifest hoàn chỉnh (images + mapMarkers + detections + sensorLogs) sau khi tạo xong patrol. Overwrite bản half-written từ `savePatrolImageFromFile`.
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+### 2026-08-18 — Seed data: ảnh wide giống nhau + zoom theo severity
+
+**Lý do**: Mỗi ngày cần 2 ảnh: wide (cùng 1 ảnh di tích) + zoom (ảnh vết nứt theo mức độ An toàn/Cần chú ý/Cảnh báo). Điểm chụp 1 chỉ dùng 2 mức thấp, điểm chụp 2 dùng cả 3.
+
+**heriguard-app**
+- `src/lib/sim/simMedia.ts`: **Viết lại hoàn toàn** — thêm `resolveWideUri()` (cùng 1 ảnh di tích cho tất cả ngày) + `resolveZoomUri(severity)` (ảnh wall-crack theo severity). Giữ backward-compat exports cho mockBle.
+- `src/lib/sim/seedDemoData.ts`: **Mỗi patrol tạo 1 ảnh/capture point** (không còn 2): sáng → wide, chiều → zoom. Severity mapping: ĐC1 = low,medium,low | ĐC2 = low,medium,high. Confidence thay đổi theo severity (low=82%, medium=89%, high=94%).
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+**Lý do**: (1) Bản đồ mô phỏng chỉ nên có 2 marker điểm chụp cố định; (2) Points screen chỉ hiện 2 mục, AI phân tích chỉ trong trang điểm chụp; (3) Mỗi ngày cần 2 ảnh wide+close + AI phân tích theo ngày (nút bấm); (4) Bỏ so sánh 3 ngày.
+
+**heriguard-app**
+- `src/components/dashboard/VirtualMap.tsx`: **Bỏ robot stop markers + latest image thumbnail** — chỉ hiển thị 2 capture point markers. Legend đơn giản: "Điểm chụp — điểm dừng cố định".
+- `src/app/(tabs)/points.tsx`: **Bỏ DayTrendCard** đầu trang — chỉ hiện 2 folder cards. Footer: "Robot tự chụp ảnh khi dừng".
+- `src/lib/sim/seedDemoData.ts`: **Mỗi patrol tạo 2 ảnh/capture point** (shotKind 0 = Wide, shotKind 2 = Close High). Wide: bbox nhỏ, confidence thấp hơn. Close: bbox lớn, confidence cao hơn. Nhiệt độ/độ ẩm khác nhau cho mỗi shot. Bbox tăng dần theo patrolIndex → demo trend.
+- `src/app/capture-point/[id].tsx`: **Ngày hiển thị "NGÀY N"** (không phải "3 ngày trước"). Mỗi ngày hiện 2 ảnh (wide + close) với shot kind label. **Bỏ ComparisonRow / so sánh 3 ngày**. AI phân tích xu hướng vẫn ở đầu trang (DayTrendCard).
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+**Lý do**: `writePatrolManifest` fail với `FileNotFoundException` — `patrolDir()` dùng `new Directory(parent, "patrols", patrolId)` nhưng thư mục `patrols/` chưa tồn tại → Expo `Directory` constructor không tự tạo parent dirs → file write fail → 0 patrols loaded.
+
+**heriguard-app**
+- `src/lib/fileStorage.ts`: **Fix `patrolDir()`** — tạo `heriguard/patrols/` trước bằng `ensureDir`, rồi mới tạo `{patrolId}/`. Thêm **`ensureDirAsync()`** — dùng `makeDirectoryAsync({ intermediates: true })` để đảm bảo toàn bộ chuỗi thư mục tồn tại. `writePatrolManifest` gọi `ensureDirAsync` trước khi ghi.
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+**heriguard-app**
+- `src/constants/capturePoints.ts`: **Đổi capture points** từ node 2+5 → **node 1 (0.5m) + node 2 (1.0m)**. M-Vision chỉ chụp tại 2 điểm dừng này.
+- `src/lib/sim/simMedia.ts`: **Cập nhật `isCrackNode`** → trả `true` cho node 1,2 (capture points), thay vì `nodeX2 >= 2`.
+- `src/lib/sim/seedDemoData.ts`: **Chỉ tạo ảnh M-Vision cho capture point nodes** (1, 2) — sensor data vẫn tạo cho node 0-6. Thêm **fallback URI** khi `copyAsync` fail: dùng asset URI gốc thay vì crash. Import `CAPTURE_POINTS`.
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+### 2026-08-17 — Fix: real BLE capture pipeline robustness (firmware + app)
+
+**Lý do**: Real BLE capture ("Chụp + Nhận diện") chỉ hoạt động 1 lần rồi dừng, dữ liệu không lưu vào folder điểm chụp, AI không chạy trên ảnh thật. Root causes: (1) firmware không có cooldown giữa 2 lần chụp → camera buffer bịoverwrite; (2) app save pipeline thiếu error handling → ML fail silently, data mất; (3) `saveStaticCaptureFromUri` abort hoàn toàn khi ML fail thay vì lưu baseline.
+
+**heriguard-robot** (`src/main.cpp`):
+- Thêm `lastCaptureMs` cooldown 300ms giữa 2 lần `captureJpegFromCam()` — camera cần thời gian reset frame buffer.
+- `'N'` command: log rõ sensor data (temp/humidity/node) trước khi capture, thêm error message khi capture fail.
+
+**heriguard-app**:
+- `src/types/robot.ts`: `PatrolCommand` thêm `"N"` (chụp tĩnh).
+- `src/lib/ble.ts` (`saveJpegBytes`): validate JPEG magic bytes (0xFF 0xD8), reject data rỗng — prevents corrupted file writes.
+- `src/lib/ble.ts` (`handleCameraChunk`): chuyển từ `.then().catch()` sang async IIFE + try-catch toàn pipeline — log rõ từng bước (JPEG saved → ML done → patrol saved), fallback base64 display khi file save fail.
+- `src/lib/staticCapture.ts` (`saveStaticCaptureFromUri`): ML fail → vẫn lưu ảnh baseline (không detection); `savePatrolImageFromFile` fail → fallback sourceUri; mỗi bước có try-catch riêng, không abort toàn bộ pipeline.
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+### 2026-08-17 — Fix: chụp nhận diện chỉ được 1 lần + dữ liệu nền điểm chụp
+
+**Lý do**: (1) Bấm "Chụp + Nhận diện" lần 2 không hoạt động — chunk buffer (`cameraChunks`) không được reset trong nhánh static capture → lần 2 bị trigger reassemble sớm với data cũ, JPEG bị corrupt. (2) Mỗi điểm chụp cần có sẵn nền data 3 ngày + AI phân tích trong folder.
+
+**heriguard-app**
+- `src/lib/ble.ts` (`handleCameraChunk`): **thêm `cameraChunks = []; cameraExpectedChunks = 0;`** trong nhánh `!currentPatrol` (static capture) — match với nhánh patrol. Đây là root cause: khi không reset buffer, frameId trùng → reassemble trigger ngay chunk đầu với data cũ → JPEG corrupt → AI fail silently.
+- **Nền data điểm chụp**: đã có sẵn từ seed demo — 6 patrols (3 ngày × sáng/chiều), mỗi patrol có ảnh + detection + `analyzeNodeImage()` cho node 2-6. `buildDayBlocks()` group theo ngày → mỗi ngày 2 cụm ảnh (sáng/chiều) + AI tổng hợp. Folder điểm chụp tự có dữ liệu khi mở trang.
+- **Flow chụp nhận diện**: capture → `saveJpegBytes()` → `analyzeCrackOnDevice()` (ML model on-device) → nếu crack → `saveStaticCaptureFromUri()` lưu vào `patrols/{capture-timestamp}/node_{nodeX2}/` + thêm vào `patrolStore` + `detectionStore` + `alertStore`. Nếu sạch → không lưu (chỉ hiện trên carousel).
+
+**Kiểm tra**: `npx tsc --noEmit` 0 lỗi.
+
+### 2026-08-17 — Điểm chụp: 2 thư mục có lịch sử theo ngày + AI xu hướng + luồng chụp mới
+
+**Lý do**: user yêu cầu tái thiết kế giao diện: (1) trên bản đồ guard.png đánh dấu sẵn 2 điểm chụp cố định (1.0m và 2.5m); (2) gom 2 tab AI + Lịch sử thành 1 tab "Điểm chụp" — mỗi điểm 1 thư mục chứa AI phân tích + nhiều cụm ảnh, ít nhất 3 ngày, mỗi ngày 2 cụm ảnh (sáng/chiều), cuối ngày có AI tổng hợp, phía trên có 1 AI phân tích thay đổi theo ngày; (3) ở chế độ thật, M-Vision chụp khi nhận tín hiệu → hiện ảnh lên "Ghi hình hiện trường" → ảnh được quét nhận diện trên app → chỉ ảnh có vết nứt lưu vào thư mục điểm dừng.
+
+**heriguard-app**
+- `src/constants/capturePoints.ts` (mới): **2 điểm chụp cố định** — ĐC1 = 1.0m (node 2), ĐC2 = 2.5m (node 5), kèm mô tả khu vực + hàm tra cứu.
+- `src/components/dashboard/VirtualMap.tsx`: bản đồ guard.png **luôn hiển thị 2 điểm chụp** (chấm vàng + tag "ĐC1/ĐC2"), chạm để mở thư mục điểm chụp; marker robot trong tuần tra giữ nguyên nhưng tránh trùng vị trí điểm chụp; legend cập nhật 2 màu.
+- `src/lib/daySummary.ts` (mới): gộp ảnh theo **ngày** tại 1 node — mỗi ngày 2 cụm (sáng <12h / chiều ≥12h, tự tách đôi nếu chưa đủ), `summarizeDay()` viết **AI tổng hợp ngày** (rule-based tiếng Việt: số phát hiện, diện tích nứt trung bình, Δ so hôm trước, nhiệt độ/độ ẩm) + `blocksToTrendPoints()` xuất 1 điểm/ngày cho AI xu hướng.
+- `src/components/dashboard/DayTrendCard.tsx` (mới): thẻ **AI phân tích thay đổi theo ngày** dùng chung cho tab + từng folder — Gemini nếu có API key, ngược lại mock (giống pattern cũ của màn AI).
+- `src/app/(tabs)/points.tsx` (mới, thay tab "AI" + "Lịch sử"): AI xu hướng theo ngày phía trên + **2 thư mục điểm chụp** (số ngày/ảnh/phát hiện, Δ diện tích so ngày trước, badge mức độ, tóm tắt ngày mới nhất).
+- `src/app/capture-point/[id].tsx` (mới): trang **thư mục điểm chụp** — AI theo ngày của điểm, các ngày tách riêng, mỗi ngày 2 cụm ảnh kèm dữ liệu nhiệt độ/độ ẩm/độ tin cậy, cuối ngày 1 thẻ "AI tổng hợp ngày", dưới cùng là lịch sử chi tiết tại điểm.
+- `src/app/(tabs)/_layout.tsx`: thay 2 tab `ai` + `history` bằng 1 tab `points` ("Điểm chụp"); xoá file `(tabs)/ai.tsx`, `history.tsx`.
+- `src/lib/sim/seedDemoData.ts`: demo giờ tạo **6 lần tuần tra** (3 ngày × sáng 8h/chiều 15h) — mỗi điểm chụp có đủ 3 ngày × 2 cụm ảnh, diện tích nứt tăng dần theo từng lần → AI xu hướng theo ngày luôn có dữ liệu.
+- `src/lib/sim/simMedia.ts` + `src/lib/mockBle.ts`: `isCrackNode` từ node ≥3 → **node ≥2** (Điểm chụp 1 tại 1.0m giờ cũng có dữ liệu phát hiện để demo 2 folder đều đầy đủ).
+- `src/lib/ble.ts` (luồng thật): khi đang tuần tra, ảnh robot gửi đến → **lưu file → quét AI on-device** → hiện lên "Ghi hình hiện trường" (CameraCard/carousel) → có vết nứt thì lưu vào point dừng (patrol node + detectionStore + alert). Không còn chỉ lưu ảnh trống không phân tích như trước (robot không tự detect — app quyết định).
+- `src/components/dashboard/TrendSummary.tsx`: nút "Xem phân tích chi tiết" trỏ sang tab Điểm chụp thay vì tab AI đã xoá.
+
+**Chế độ thật (real BLE)**: giữ nguyên firmware (robot chỉ chụp khi nhận lệnh — INSPECT đang tắt). Ảnh lệnh 'N' → `staticCapture` chạy model trên app; ảnh tuần tra → `ble.ts` quét AI on-device. Chỉ ảnh đạt ngưỡng vết nứt mới lưu vào thư mục điểm dừng (`nodeX2` khớp điểm chụp).
+
+**Kiểm tra**: `tsc --noEmit` 0 lỗi; `expo lint` 0 lỗi.
+
+### 2026-08-17 — Servo remap + D-pad điều khiển + disable INSPECT
+
+**Lý do**: Remap 4 servo theo wiring thật (RC4=ngang, RC3=gập cam, RC2=nâng cam, RC1=xoay trục), thêm nút D-pad trên app để điều khiển servo thủ công, và disable toàn bộ chuỗi INSPECT_A/B/C/D/E (chưa dùng).
+
+**heriguard-robot `src/main.cpp`**
+- **Servo remap**: RC4=ngang (setHWDir=true, home=90), RC3=gập cam (setHWDir=true, home=90), RC2=nâng cam (setHWDir=false, home=0), RC1=xoay trục (setHWDir=true, home=90).
+- **`initServosToHome()`**: gọi `setHWDir()` cho từng servo + sync angle tracking globals.
+- **Servo angle tracking**: thêm `servoPanAngle`, `servoFoldAngle`, `servoTiltAngle`, `servoTwistAngle` + `clampServo()` cho D-pad relative moves.
+- **BLE servo commands** (`handleCommand`): `F`+step → RC4 pan, `G`+step → RC3 fold, `T`+step → RC2 tilt, `W`+step → RC1 twist. Step là int8 (±15° mỗi lần bấm).
+- **Disable INSPECT**: comment hết `inspectWide`, `inspectRetract`, `inspectCloseApproach`, `inspectScanLow`, `inspectScanHigh` + enum states INSPECT_A–E + forward declarations. `patrolMove()` dừng lại sau 0.5m mà không chuyển sang INSPECT.
+
+**heriguard-app**
+- `src/components/dashboard/ControlPanel.tsx`: thêm **D-pad camera** — 4 mũi tên (↑↓ pan RC4, ←→ tilt RC2) + 2 hàng nút cho RC3 gập/mở + RC1 xoay trục trái/phải. Mỗi nút gửi command servo ±15° qua BLE.
+- `src/types/robot.ts`: thêm `F`, `G`, `T`, `W` vào `PatrolCommand`.
+- `src/lib/mockBle.ts`: mock servo commands (log, không có hardware).
+
+**Kiểm tra**: `pio run` SUCCESS (firmware).
+
+### 2026-08-17 — Fix: AI nhận diện chạy trên máy thật + demo luôn có sẵn dữ liệu node
+
+**Lý do**: user test trên điện thoại thật: (1) chạy ảnh mẫu trong màn "Nhận diện vết nứt" không hiện kết quả phân tích (error "Bản thử nghiệm model cần chạy trên web") — bản port native trước đó ghi changelog nhưng code thật chưa được sửa (`ml/crack.ts` vẫn chỉ có đường web canvas); (2) tab Lịch sử không thấy phần so sánh/lưu trữ theo node vì seed demo không chạy khi thiết bị đã có patrol cũ (điều kiện `patrols.length === 0` quá chặt).
+
+**heriguard-app**
+- `src/ml/crack.ts`: thêm đường **native** cho `loadGrayImage()` — dùng `expo-image-manipulator` (resize 320×320 = lưới 5×5 ô 64×64) → đọc base64 qua `expo-file-system/legacy` → `jpeg-js` decode → grayscale; giữ nguyên đường web (canvas). Ảnh mẫu/chụp camera/thư viện/ảnh robot giờ chạy đúng model 97.28% ngay trên máy thật, hiện bbox + % tin cậy + thời gian như trên git branch.
+- `src/app/_layout.tsx`: seed demo data chạy khi **chưa có patrol `demo-*` nào** (trong store lẫn trên đĩa) — không còn bị chặn bởi patrol cũ không ảnh → mở app là thấy ngay 7 node × 3 lần tuần tra cũ trong "Lưu trữ theo node"; data mới từ mock/robot lưu vào node folder riêng và hiện Δ so sánh.
+
+**Kiểm tra**: `tsc --noEmit` 0 lỗi; `expo lint` 0 lỗi.
+
 ### 2026-08-16 — Hoàn thiện port B3: junction rẽ 90° + xử lý mất line
 
 **heriguard-robot `src/main.cpp`** (tiếp theo port B3)
